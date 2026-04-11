@@ -1,11 +1,25 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { page } from '$app/stores';
   import Sidebar from '$lib/components/Sidebar.svelte';
+  import { setupDownloadListeners } from '$lib/stores/downloads';
   import '../app.css';
 
   let { children } = $props();
 
   let isPlayerRoute = $derived($page.url.pathname === '/player');
+
+  onMount(() => {
+    let cleanup: (() => void) | undefined;
+
+    setupDownloadListeners().then((unlisten) => {
+      cleanup = unlisten;
+    });
+
+    return () => {
+      cleanup?.();
+    };
+  });
 </script>
 
 <svelte:head>
