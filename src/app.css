@@ -1,0 +1,13 @@
+@import "tailwindcss";
+
+:root {
+  --color-base: #1a1a2e;
+  --color-sidebar: #16213e;
+  --color-card: #0f3460;
+  --color-accent: #e94560;
+  --color-accent-green: #4ecca3;
+  --color-accent-yellow: #f0a500;
+  --color-accent-purple: #7b68ee;
+  --color-text: #e0e0e0;
+  --color-text-muted: #888888;
+}
