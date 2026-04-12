@@ -3,6 +3,7 @@ pub mod downloads;
 pub mod epg;
 pub mod favorites;
 pub mod history;
+pub mod mpv_player;
 pub mod player;
 pub mod playlists;
 pub mod recommendations;

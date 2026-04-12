@@ -7,7 +7,7 @@ pub struct M3uEntry {
     pub logo_url: Option<String>,
     pub stream_url: String,
     pub epg_id: Option<String>,
-    pub is_vod: bool,
+    pub content_type: String,
 }
 
 /// Extract an attribute value from an #EXTINF line.
@@ -36,14 +36,20 @@ fn extract_name(line: &str) -> String {
     }
 }
 
-/// Detect whether a stream URL represents VOD content.
-fn is_vod_url(url: &str) -> bool {
+/// Detect the content type from a stream URL.
+fn detect_content_type(url: &str) -> String {
     let lower = url.to_lowercase();
-    lower.ends_with(".mp4")
+    if lower.contains("/series/") {
+        "series".to_string()
+    } else if lower.ends_with(".mp4")
         || lower.ends_with(".mkv")
         || lower.ends_with(".avi")
         || lower.contains("/movie/")
-        || lower.contains("/series/")
+    {
+        "vod".to_string()
+    } else {
+        "live".to_string()
+    }
 }
 
 /// Parse an M3U/M3U8 playlist string into a list of entries.
@@ -72,14 +78,14 @@ pub fn parse_m3u(content: &str) -> Vec<M3uEntry> {
                 let next = lines[i].trim();
                 if !next.is_empty() && !next.starts_with('#') {
                     let stream_url = next.to_string();
-                    let is_vod = is_vod_url(&stream_url);
+                    let content_type = detect_content_type(&stream_url);
                     entries.push(M3uEntry {
                         name,
                         group,
                         logo_url,
                         stream_url,
                         epg_id,
-                        is_vod,
+                        content_type,
                     });
                     break;
                 }
@@ -113,15 +119,15 @@ http://stream.example.com/live/ch2.ts
         assert_eq!(entries[0].logo_url, Some("http://logo.com/1.png".to_string()));
         assert_eq!(entries[0].stream_url, "http://stream.example.com/live/ch1.m3u8");
         assert_eq!(entries[0].epg_id, Some("ch1.example".to_string()));
-        assert!(!entries[0].is_vod);
+        assert_eq!(entries[0].content_type, "live");
 
         assert_eq!(entries[1].name, "Channel Two");
         assert_eq!(entries[1].group, "Sports");
-        assert!(!entries[1].is_vod);
+        assert_eq!(entries[1].content_type, "live");
     }
 
     #[test]
-    fn test_vod_detection() {
+    fn test_content_type_detection() {
         let content = r#"#EXTM3U
 #EXTINF:-1 group-title="Movies",Some Movie
 http://server.com/movie/1234.mp4
@@ -133,9 +139,9 @@ http://server.com/live/stream.m3u8
         let entries = parse_m3u(content);
         assert_eq!(entries.len(), 3);
 
-        assert!(entries[0].is_vod, "MP4 movie should be VOD");
-        assert!(entries[1].is_vod, "MKV series should be VOD");
-        assert!(!entries[2].is_vod, "M3U8 live should not be VOD");
+        assert_eq!(entries[0].content_type, "vod", "MP4 movie should be vod");
+        assert_eq!(entries[1].content_type, "series", "series URL should be series");
+        assert_eq!(entries[2].content_type, "live", "M3U8 live should be live");
     }
 
     #[test]

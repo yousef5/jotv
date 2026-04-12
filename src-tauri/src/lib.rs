@@ -2,6 +2,8 @@ pub mod commands;
 pub mod db;
 pub mod parsers;
 
+use commands::downloads::DownloadManager;
+use commands::mpv_player::MpvState;
 use db::Database;
 use tauri::Manager;
 
@@ -29,6 +31,8 @@ pub fn run() {
                 Database::new(app_data_dir).expect("Failed to initialize database");
 
             app.manage(database);
+            app.manage(MpvState::new());
+            app.manage(DownloadManager::new());
 
             Ok(())
         })
@@ -38,6 +42,9 @@ pub fn run() {
             commands::playlists::add_playlist_from_url,
             commands::playlists::add_playlist_from_file,
             commands::playlists::add_playlist_from_xtream,
+            commands::playlists::get_xtream_account_info,
+            commands::playlists::get_series_info,
+            commands::playlists::refresh_playlist,
             commands::playlists::delete_playlist,
             commands::playlists::get_playlist_groups,
             commands::playlists::merge_playlists,
@@ -45,10 +52,19 @@ pub fn run() {
             commands::playlists::export_playlist,
             // Channels
             commands::channels::get_channels,
+            commands::channels::get_channels_by_type,
+            commands::channels::get_groups_by_type,
+            commands::channels::get_recently_added,
+            commands::channels::get_channels_by_group,
+            commands::channels::get_content_type_counts,
+            commands::channels::search_channels_in_playlist,
             commands::channels::search_channels,
             commands::channels::get_dashboard_stats,
             // Favorites
             commands::favorites::get_favorites,
+            commands::favorites::get_favorite_categories,
+            commands::favorites::add_favorite,
+            commands::favorites::remove_favorite,
             commands::favorites::toggle_favorite,
             commands::favorites::is_favorite,
             // History
@@ -68,7 +84,16 @@ pub fn run() {
             // Player
             commands::player::launch_external_player,
             commands::player::detect_external_players,
+            // MPV Player
+            commands::mpv_player::mpv_play,
+            commands::mpv_player::mpv_load,
+            commands::mpv_player::mpv_pause,
+            commands::mpv_player::mpv_stop,
+            commands::mpv_player::mpv_fullscreen,
+            commands::mpv_player::mpv_volume,
+            commands::mpv_player::mpv_is_running,
             // Downloads
+            commands::downloads::start_download,
             commands::downloads::queue_download,
             commands::downloads::get_downloads,
             commands::downloads::pause_download,

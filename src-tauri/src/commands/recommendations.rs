@@ -26,7 +26,7 @@ pub async fn get_recommendations(
         // No history: return random channels
         let mut stmt = conn
             .prepare(
-                "SELECT id, playlist_id, name, group_name, stream_url, logo_url, epg_id, is_vod, created_at
+                "SELECT id, playlist_id, name, group_name, stream_url, logo_url, epg_id, content_type, created_at
                  FROM channels ORDER BY RANDOM() LIMIT ?1",
             )
             .map_err(|e| e.to_string())?;
@@ -41,7 +41,7 @@ pub async fn get_recommendations(
                     stream_url: row.get(4)?,
                     logo_url: row.get(5)?,
                     epg_id: row.get(6)?,
-                    is_vod: row.get::<_, i32>(7)? != 0,
+                    content_type: row.get(7)?,
                     created_at: row.get(8)?,
                 })
             })
@@ -125,7 +125,7 @@ pub async fn get_recommendations(
         let remaining = limit - results.len() as i64;
         let mut stmt = conn
             .prepare(
-                "SELECT id, playlist_id, name, group_name, stream_url, logo_url, epg_id, is_vod, created_at
+                "SELECT id, playlist_id, name, group_name, stream_url, logo_url, epg_id, content_type, created_at
                  FROM channels
                  WHERE group_name = ?1
                  ORDER BY RANDOM()
@@ -143,7 +143,7 @@ pub async fn get_recommendations(
                     stream_url: row.get(4)?,
                     logo_url: row.get(5)?,
                     epg_id: row.get(6)?,
-                    is_vod: row.get::<_, i32>(7)? != 0,
+                    content_type: row.get(7)?,
                     created_at: row.get(8)?,
                 })
             })
@@ -166,7 +166,7 @@ pub async fn get_recommendations(
 
         let mut stmt = conn
             .prepare(
-                "SELECT id, playlist_id, name, group_name, stream_url, logo_url, epg_id, is_vod, created_at
+                "SELECT id, playlist_id, name, group_name, stream_url, logo_url, epg_id, content_type, created_at
                  FROM channels
                  ORDER BY RANDOM()
                  LIMIT ?1",
@@ -183,7 +183,7 @@ pub async fn get_recommendations(
                     stream_url: row.get(4)?,
                     logo_url: row.get(5)?,
                     epg_id: row.get(6)?,
-                    is_vod: row.get::<_, i32>(7)? != 0,
+                    content_type: row.get(7)?,
                     created_at: row.get(8)?,
                 })
             })

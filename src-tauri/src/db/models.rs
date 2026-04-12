@@ -22,7 +22,7 @@ pub struct Channel {
     pub stream_url: String,
     pub logo_url: Option<String>,
     pub epg_id: Option<String>,
-    pub is_vod: bool,
+    pub content_type: String,
     pub created_at: String,
 }
 
@@ -42,6 +42,7 @@ pub struct FavoriteChannel {
     pub stream_url: String,
     pub logo_url: Option<String>,
     pub playlist_name: String,
+    pub category: String,
     pub added_at: String,
 }
 
@@ -68,7 +69,7 @@ pub struct ViewingHistoryEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Download {
     pub id: i64,
-    pub channel_id: i64,
+    pub channel_id: Option<i64>,
     pub url: String,
     pub file_path: Option<String>,
     pub status: String,
@@ -83,6 +84,12 @@ pub struct Download {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChannelGroup {
     pub name: String,
+    pub count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContentTypeCount {
+    pub content_type: String,
     pub count: i64,
 }
 

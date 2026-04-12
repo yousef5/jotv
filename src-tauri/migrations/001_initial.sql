@@ -18,16 +18,19 @@ CREATE TABLE IF NOT EXISTS channels (
     stream_url TEXT NOT NULL,
     logo_url TEXT,
     epg_id TEXT,
-    is_vod INTEGER NOT NULL DEFAULT 0,
+    content_type TEXT NOT NULL DEFAULT 'live',
+    added_on_server INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_channels_playlist ON channels(playlist_id);
 CREATE INDEX IF NOT EXISTS idx_channels_group ON channels(group_name);
+CREATE INDEX IF NOT EXISTS idx_channels_content_type ON channels(content_type);
 
 CREATE TABLE IF NOT EXISTS favorites (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     channel_id INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+    category TEXT NOT NULL DEFAULT 'General',
     added_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(channel_id)
 );
@@ -58,7 +61,7 @@ CREATE INDEX IF NOT EXISTS idx_history_started ON viewing_history(started_at);
 
 CREATE TABLE IF NOT EXISTS downloads (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    channel_id INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+    channel_id INTEGER REFERENCES channels(id) ON DELETE SET NULL,
     url TEXT NOT NULL,
     file_path TEXT,
     status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued', 'downloading', 'paused', 'completed', 'failed')),

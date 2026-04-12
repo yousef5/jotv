@@ -22,7 +22,7 @@ export interface Channel {
   stream_url: string;
   logo_url: string | null;
   epg_id: string | null;
-  is_vod: boolean;
+  content_type: 'live' | 'vod' | 'series';
   created_at: string;
 }
 
@@ -39,6 +39,7 @@ export interface FavoriteChannel {
   stream_url: string;
   logo_url: string | null;
   playlist_name: string;
+  category: string;
   added_at: string;
 }
 
@@ -62,7 +63,7 @@ export interface ViewingHistoryEntry {
 
 export interface Download {
   id: number;
-  channel_id: number;
+  channel_id: number | null;
   url: string;
   file_path: string | null;
   status: string;
@@ -79,6 +80,11 @@ export interface DashboardStats {
   total_favorites: number;
   total_playlists: number;
   total_downloads: number;
+}
+
+export interface ContentTypeCount {
+  content_type: string;
+  count: number;
 }
 
 export interface ExternalPlayer {
@@ -109,6 +115,67 @@ export function addPlaylistFromXtream(
   return invoke<Playlist>('add_playlist_from_xtream', { name, server, username, password });
 }
 
+export interface XtreamAccountInfo {
+  username: string;
+  status: string;
+  exp_date: string | null;
+  is_trial: string | null;
+  active_cons: string | null;
+  max_connections: string | null;
+  created_at: string | null;
+}
+
+export function getXtreamAccountInfo(
+  server: string,
+  username: string,
+  password: string
+): Promise<XtreamAccountInfo> {
+  return invoke<XtreamAccountInfo>('get_xtream_account_info', { server, username, password });
+}
+
+export interface SeriesInfo {
+  name: string | null;
+  cover: string | null;
+  plot: string | null;
+  cast: string | null;
+  director: string | null;
+  genre: string | null;
+  release_date: string | null;
+  rating: unknown;
+  backdrop_path: unknown;
+}
+
+export interface EpisodeDetail {
+  id: number;
+  episode_num: string;
+  title: string;
+  stream_url: string;
+  container_extension: string;
+}
+
+export interface SeasonDetail {
+  season_number: string;
+  episodes: EpisodeDetail[];
+}
+
+export interface SeriesDetail {
+  info: SeriesInfo;
+  seasons: SeasonDetail[];
+}
+
+export function getSeriesInfo(
+  server: string,
+  username: string,
+  password: string,
+  seriesId: number
+): Promise<SeriesDetail> {
+  return invoke<SeriesDetail>('get_series_info', { server, username, password, seriesId });
+}
+
+export function refreshPlaylist(id: number): Promise<Playlist> {
+  return invoke<Playlist>('refresh_playlist', { id });
+}
+
 export function deletePlaylist(id: number): Promise<void> {
   return invoke<void>('delete_playlist', { id });
 }
@@ -135,6 +202,41 @@ export function getChannels(playlistId: number): Promise<Channel[]> {
   return invoke<Channel[]>('get_channels', { playlistId });
 }
 
+export function getChannelsByType(playlistId: number, contentType: string): Promise<Channel[]> {
+  return invoke<Channel[]>('get_channels_by_type', { playlistId, contentType });
+}
+
+export function getRecentlyAdded(playlistId: number, contentType: string, limit: number = 60): Promise<Channel[]> {
+  return invoke<Channel[]>('get_recently_added', { playlistId, contentType, limit });
+}
+
+export function getGroupsByType(playlistId: number, contentType: string): Promise<ChannelGroup[]> {
+  return invoke<ChannelGroup[]>('get_groups_by_type', { playlistId, contentType });
+}
+
+export function getChannelsByGroup(
+  playlistId: number,
+  contentType: string,
+  groupName: string,
+  limit: number,
+  offset: number
+): Promise<Channel[]> {
+  return invoke<Channel[]>('get_channels_by_group', { playlistId, contentType, groupName, limit, offset });
+}
+
+export function getContentTypeCounts(playlistId: number): Promise<ContentTypeCount[]> {
+  return invoke<ContentTypeCount[]>('get_content_type_counts', { playlistId });
+}
+
+export function searchChannelsInPlaylist(
+  playlistId: number,
+  contentType: string,
+  query: string,
+  limit: number = 100
+): Promise<Channel[]> {
+  return invoke<Channel[]>('search_channels_in_playlist', { playlistId, contentType, query, limit });
+}
+
 export function searchChannels(query: string): Promise<Channel[]> {
   return invoke<Channel[]>('search_channels', { query });
 }
@@ -147,6 +249,18 @@ export function getDashboardStats(): Promise<DashboardStats> {
 
 export function getFavorites(): Promise<FavoriteChannel[]> {
   return invoke<FavoriteChannel[]>('get_favorites');
+}
+
+export function getFavoriteCategories(): Promise<string[]> {
+  return invoke<string[]>('get_favorite_categories');
+}
+
+export function addFavorite(channelId: number, category: string): Promise<boolean> {
+  return invoke<boolean>('add_favorite', { channelId, category });
+}
+
+export function removeFavorite(channelId: number): Promise<void> {
+  return invoke<void>('remove_favorite', { channelId });
 }
 
 export function toggleFavorite(channelId: number): Promise<boolean> {
@@ -187,6 +301,10 @@ export function getCurrentProgram(epgId: string): Promise<EpgEntry | null> {
 
 // ─── Download Commands ───────────────────────────────────────────────────────
 
+export function startDownload(url: string, filename: string, channelId: number): Promise<Download> {
+  return invoke<Download>('start_download', { url, filename, channelId });
+}
+
 export function queueDownload(channelId: number, url: string): Promise<Download> {
   return invoke<Download>('queue_download', { channelId, url });
 }
@@ -218,6 +336,38 @@ export function getRecommendations(limit?: number): Promise<Channel[]> {
 }
 
 // ─── Player Commands ─────────────────────────────────────────────────────────
+
+// ─── MPV Player Commands ────────────────────────────────────────────────────
+
+export function mpvPlay(url: string, title: string): Promise<void> {
+  return invoke<void>('mpv_play', { url, title });
+}
+
+export function mpvLoad(url: string, title: string): Promise<void> {
+  return invoke<void>('mpv_load', { url, title });
+}
+
+export function mpvPause(): Promise<void> {
+  return invoke<void>('mpv_pause');
+}
+
+export function mpvStop(): Promise<void> {
+  return invoke<void>('mpv_stop');
+}
+
+export function mpvFullscreen(): Promise<void> {
+  return invoke<void>('mpv_fullscreen');
+}
+
+export function mpvVolume(volume: number): Promise<void> {
+  return invoke<void>('mpv_volume', { volume });
+}
+
+export function mpvIsRunning(): Promise<boolean> {
+  return invoke<boolean>('mpv_is_running');
+}
+
+// ─── External Player Commands ───────────────────────────────────────────────
 
 export function launchExternalPlayer(playerPath: string, streamUrl: string): Promise<void> {
   return invoke<void>('launch_external_player', { playerPath, streamUrl });

@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { onDestroy } from 'svelte';
+  import { listen } from '@tauri-apps/api/event';
   import { addPlaylistFromUrl, addPlaylistFromFile, addPlaylistFromXtream } from '$lib/tauri';
   import { loadPlaylists } from '$lib/stores/playlists';
 
@@ -7,6 +9,7 @@
   let activeTab: 'url' | 'file' | 'xtream' = $state('url');
   let loading = $state(false);
   let error = $state('');
+  let progressText = $state('');
 
   // URL tab
   let urlName = $state('');
@@ -22,9 +25,17 @@
   let xtreamUsername = $state('');
   let xtreamPassword = $state('');
 
+  // Listen for xtream import progress events
+  let unlisten: (() => void) | null = null;
+  listen<{ stage: string; current: number; total: number }>('xtream-import-progress', (event) => {
+    progressText = event.payload.stage;
+  }).then((fn) => { unlisten = fn; });
+  onDestroy(() => { unlisten?.(); });
+
   async function handleSubmit() {
     loading = true;
     error = '';
+    progressText = '';
     try {
       if (activeTab === 'url') {
         if (!urlName || !urlValue) { error = 'Fill in all fields'; loading = false; return; }
@@ -44,12 +55,13 @@
       error = String(e);
     } finally {
       loading = false;
+      progressText = '';
     }
   }
 
   function handleBackdropClick(e: MouseEvent) {
     if ((e.target as HTMLElement).classList.contains('modal-backdrop')) {
-      onclose();
+      if (!loading) onclose();
     }
   }
 </script>
@@ -87,8 +99,12 @@
         <div class="error">{error}</div>
       {/if}
 
+      {#if loading && progressText}
+        <div class="progress-info">{progressText}</div>
+      {/if}
+
       <div class="modal-actions">
-        <button type="button" class="btn-ghost" onclick={onclose}>Cancel</button>
+        <button type="button" class="btn-ghost" onclick={onclose} disabled={loading}>Cancel</button>
         <button type="submit" class="btn-accent" disabled={loading}>
           {loading ? 'Importing...' : 'Import'}
         </button>
@@ -196,6 +212,21 @@
     padding: 8px 12px;
     background: rgba(233, 69, 96, 0.1);
     border-radius: var(--radius-btn);
+  }
+
+  .progress-info {
+    font-size: 12px;
+    color: var(--color-text-muted);
+    padding: 8px 12px;
+    background: var(--color-surface);
+    border-radius: var(--radius-btn);
+    text-align: center;
+    animation: pulse 1.5s ease-in-out infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
   }
 
   .modal-actions {

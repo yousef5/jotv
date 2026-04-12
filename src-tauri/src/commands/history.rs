@@ -39,7 +39,7 @@ pub async fn get_recently_watched(
 
     let mut stmt = conn
         .prepare(
-            "SELECT c.id, c.playlist_id, c.name, c.group_name, c.stream_url, c.logo_url, c.epg_id, c.is_vod, c.created_at
+            "SELECT c.id, c.playlist_id, c.name, c.group_name, c.stream_url, c.logo_url, c.epg_id, c.content_type, c.created_at
              FROM channels c
              INNER JOIN (
                  SELECT channel_id, MAX(started_at) as last_watched
@@ -61,7 +61,7 @@ pub async fn get_recently_watched(
                 stream_url: row.get(4)?,
                 logo_url: row.get(5)?,
                 epg_id: row.get(6)?,
-                is_vod: row.get::<_, i32>(7)? != 0,
+                content_type: row.get(7)?,
                 created_at: row.get(8)?,
             })
         })
