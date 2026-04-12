@@ -1,0 +1,31 @@
+pkgname=jotv-bin
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Modern IPTV Player for Desktop - Built with Tauri, SvelteKit, and MPV"
+arch=('x86_64')
+url="https://github.com/yousef5/jotv"
+license=('MIT')
+depends=('webkit2gtk-4.1' 'gtk3' 'openssl' 'mpv')
+optdepends=('vlc: alternative video player for VOD')
+provides=('jotv')
+source=("jotv-${pkgver}::jotv")
+sha256sums=('SKIP')
+
+package() {
+    install -Dm755 "${srcdir}/jotv-${pkgver}" "${pkgdir}/usr/bin/jotv"
+
+    # Desktop file
+    install -Dm644 /dev/stdin "${pkgdir}/usr/share/applications/jotv.desktop" <<DESKTOP
+[Desktop Entry]
+Name=JoTV
+Comment=Modern IPTV Player
+Exec=jotv
+Icon=jotv
+Terminal=false
+Type=Application
+Categories=AudioVideo;Video;Player;
+DESKTOP
+
+    # Icon
+    install -Dm644 /dev/stdin "${pkgdir}/usr/share/icons/hicolor/256x256/apps/jotv.png" < /dev/null
+}
