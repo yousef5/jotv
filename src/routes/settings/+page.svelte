@@ -4,10 +4,12 @@
     theme, externalPlayer, externalPlayerPath, downloadDir,
     loadSettings, updateSetting,
   } from '$lib/stores/settings';
-  import { detectExternalPlayers } from '$lib/tauri';
+  import { detectExternalPlayers, getDefaultDownloadDir, showInFolder } from '$lib/tauri';
   import type { ExternalPlayer } from '$lib/tauri';
+  import { open } from '@tauri-apps/plugin-dialog';
 
   let detectedPlayers: ExternalPlayer[] = $state([]);
+  let defaultDownloadDir: string = $state('');
 
   onMount(async () => {
     await loadSettings();
@@ -15,6 +17,11 @@
       detectedPlayers = await detectExternalPlayers();
     } catch (e) {
       console.error('Failed to detect players:', e);
+    }
+    try {
+      defaultDownloadDir = await getDefaultDownloadDir();
+    } catch (e) {
+      console.error('Failed to get default download dir:', e);
     }
   });
 
@@ -27,9 +34,31 @@
     updateSetting('external_player_path', player.path);
   }
 
-  function handleDownloadDir(e: Event) {
-    const value = (e.target as HTMLInputElement).value;
-    updateSetting('download_dir', value);
+  async function handleBrowseDownloadDir() {
+    const selected = await open({
+      directory: true,
+      multiple: false,
+      defaultPath: $downloadDir || defaultDownloadDir || undefined,
+      title: 'Select Download Folder',
+    });
+    if (selected) {
+      updateSetting('download_dir', selected);
+    }
+  }
+
+  function handleResetDownloadDir() {
+    updateSetting('download_dir', '');
+  }
+
+  async function handleOpenDownloadDir() {
+    const dir = $downloadDir || defaultDownloadDir;
+    if (dir) {
+      try {
+        await showInFolder(dir);
+      } catch {
+        // folder might not exist yet
+      }
+    }
   }
 </script>
 
@@ -99,14 +128,30 @@
           <span class="label-text">Download Directory</span>
           <span class="label-desc">Where downloaded files are saved</span>
         </div>
-        <div class="setting-control">
-          <input
-            type="text"
-            value={$downloadDir}
-            placeholder="/path/to/downloads"
-            onchange={handleDownloadDir}
-            class="dir-input"
-          />
+        <div class="setting-control dir-control">
+          <div class="dir-display" title={$downloadDir || defaultDownloadDir}>
+            <svg class="dir-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
+            <span class="dir-path">{$downloadDir || defaultDownloadDir || 'Not set'}</span>
+            {#if !$downloadDir}
+              <span class="dir-default-badge">default</span>
+            {/if}
+          </div>
+          <div class="dir-actions">
+            <button class="dir-btn" onclick={handleBrowseDownloadDir} title="Browse">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+              Browse
+            </button>
+            <button class="dir-btn" onclick={handleOpenDownloadDir} title="Open folder">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+              Open
+            </button>
+            {#if $downloadDir}
+              <button class="dir-btn reset" onclick={handleResetDownloadDir} title="Reset to default">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 105.64-12.27L1 10"/></svg>
+                Reset
+              </button>
+            {/if}
+          </div>
         </div>
       </div>
     </section>
@@ -188,6 +233,10 @@
     flex-shrink: 0;
   }
 
+  .setting-control.dir-control {
+    flex-shrink: 1;
+  }
+
   .toggle-group {
     display: flex;
     gap: 4px;
@@ -252,8 +301,82 @@
     color: var(--color-text-muted);
   }
 
-  .dir-input {
-    width: 280px;
+  .dir-control {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+    flex: 1;
+  }
+
+  .dir-display {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    background: var(--color-surface);
+    border-radius: 8px;
+    border: 1px solid var(--color-border);
+    min-width: 0;
+  }
+
+  .dir-icon {
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+    color: var(--color-text-muted);
+  }
+
+  .dir-path {
+    font-size: 13px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 1;
+    min-width: 0;
+    color: var(--color-text);
+  }
+
+  .dir-default-badge {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: rgba(78, 204, 163, 0.12);
+    color: var(--color-accent-green);
+    flex-shrink: 0;
+  }
+
+  .dir-actions {
+    display: flex;
+    gap: 6px;
+  }
+
+  .dir-btn {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 6px 12px;
+    font-size: 12px;
+    font-weight: 500;
+    border-radius: 6px;
+    background: var(--color-surface);
+    color: var(--color-text);
+    border: 1px solid var(--color-border);
+  }
+
+  .dir-btn:hover {
+    background: var(--color-hover);
+  }
+
+  .dir-btn.reset {
+    color: var(--color-text-muted);
+  }
+
+  .dir-btn :global(svg) {
+    width: 14px;
+    height: 14px;
   }
 
   .about-info {

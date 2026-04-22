@@ -4,12 +4,26 @@
   import mpegts from 'mpegts.js';
   import PlaylistItem from '$lib/components/PlaylistItem.svelte';
   import AddPlaylistModal from '$lib/components/AddPlaylistModal.svelte';
-  import { deletePlaylist, exportPlaylist, refreshPlaylist, getGroupsByType, getRecentlyAdded, getChannelsByGroup, getSeriesInfo, searchChannelsInPlaylist, recordViewing, detectExternalPlayers, launchExternalPlayer, addFavorite, removeFavorite, isFavorite, mpvPlay, mpvLoad, mpvStop, mpvPause, mpvFullscreen, mpvIsRunning, startDownload } from '$lib/tauri';
-  import type { Channel, ChannelGroup, SeriesDetail, ExternalPlayer } from '$lib/tauri';
+  import { deletePlaylist, exportPlaylist, refreshPlaylist, getGroupsByType, getRecentlyAdded, getChannelsByGroup, getSeriesInfo, getVodInfo, searchChannelsInPlaylist, recordViewing, detectExternalPlayers, launchExternalPlayer, addFavorite, removeFavorite, isFavorite, mpvPlay, mpvLoad, mpvStop, mpvPause, mpvFullscreen, mpvIsRunning, startDownload, getSetting, setSetting } from '$lib/tauri';
+  import type { Channel, ChannelGroup, SeriesDetail, VodDetail, ExternalPlayer } from '$lib/tauri';
   import {
     playlists, selectedPlaylist, contentTypeCounts,
-    loadPlaylists, loadContentTypeCounts,
+    loadPlaylists, loadContentTypeCounts, browsingState,
   } from '$lib/stores/playlists';
+  import type { PlaylistBrowsingState, TabState } from '$lib/stores/playlists';
+  import { get } from 'svelte/store';
+  import { downloads } from '$lib/stores/downloads';
+
+  // Map channel_id → download progress for inline indicators
+  let dlProgressMap = $derived((() => {
+    const map = new Map<number, { progress: number; status: string }>();
+    for (const d of $downloads) {
+      if (d.channel_id && (d.status === 'downloading' || d.status === 'queued' || d.status === 'paused')) {
+        map.set(d.channel_id, { progress: d.progress, status: d.status });
+      }
+    }
+    return map;
+  })());
 
   let showAddModal = $state(false);
   let actionLoading = $state(false);
@@ -43,6 +57,11 @@
   let seriesLoading = $state(false);
   let selectedSeason = $state<string | null>(null);
   let viewingSeries = $state<Channel | null>(null);
+  // VOD detail
+  let vodDetail = $state<VodDetail | null>(null);
+  let vodLoading = $state(false);
+  let vodError = $state('');
+  let viewingVod = $state<Channel | null>(null);
 
   let retryCount = 0;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -60,6 +79,40 @@
   let lastPlayPos = 0;
   let stallCount = 0;
   let currentStreamUrl = '';
+
+  // Per-tab state cache: remembers group/channels/series for each tab
+  let tabCache: Record<string, TabState> = {};
+
+  function saveCurrentTabState() {
+    tabCache[activeTab] = {
+      tabGroups,
+      selectedGroup,
+      groupChannels,
+      channelOffset,
+      hasMore,
+      viewingSeries,
+      seriesDetail,
+      selectedSeason,
+      viewingVod,
+      vodDetail,
+    };
+  }
+
+  function restoreTabState(tab: 'live' | 'vod' | 'series'): boolean {
+    const cached = tabCache[tab];
+    if (!cached) return false;
+    tabGroups = cached.tabGroups;
+    selectedGroup = cached.selectedGroup;
+    groupChannels = cached.groupChannels;
+    channelOffset = cached.channelOffset;
+    hasMore = cached.hasMore;
+    viewingSeries = cached.viewingSeries;
+    seriesDetail = cached.seriesDetail;
+    selectedSeason = cached.selectedSeason;
+    viewingVod = cached.viewingVod;
+    vodDetail = cached.vodDetail;
+    return true;
+  }
 
   /** Extensions that browsers CAN play inline */
   const BROWSER_PLAYABLE = ['.mp4', '.webm', '.ogg'];
@@ -373,14 +426,55 @@
   }
 
   onMount(async () => {
-    loadPlaylists();
+    await loadPlaylists();
     document.addEventListener('fullscreenchange', handleFullscreenChange);
     document.addEventListener('click', closeFavMenu);
     document.addEventListener('keydown', handleGlobalKeydown);
     try { externalPlayers = await detectExternalPlayers(); } catch {}
+
+    // Restore browsing state if returning from another page (in-session navigation)
+    const saved = get(browsingState);
+    if (saved && $selectedPlaylist) {
+      activeTab = saved.activeTab;
+      tabCache = saved.tabCache;
+      searchQuery = saved.searchQuery;
+      searchResults = saved.searchResults;
+      restoreTabState(saved.activeTab);
+      browsingState.set(null);
+      if (searchResults.length) loadFavStatus(searchResults);
+      else if (groupChannels.length) loadFavStatus(groupChannels);
+    } else if (!$selectedPlaylist) {
+      // Fresh app start — restore last playlist and tab from settings
+      try {
+        const [lastId, lastTab] = await Promise.all([
+          getSetting('last_playlist_id'),
+          getSetting('last_active_tab'),
+        ]);
+        if (lastId) {
+          const id = parseInt(lastId);
+          const found = $playlists.find(p => p.id === id);
+          if (found) {
+            selectedPlaylist.set(found);
+            const tab = (lastTab as 'live' | 'vod' | 'series') || 'live';
+            activeTab = ['live', 'vod', 'series'].includes(tab) ? tab : 'live';
+            loadContentTypeCounts(found.id);
+            loadGroupsForTab(found.id, activeTab);
+          }
+        }
+      } catch {}
+    }
   });
 
   onDestroy(() => {
+    // Save current tab into cache, then persist everything
+    saveCurrentTabState();
+    browsingState.set({
+      activeTab,
+      searchQuery,
+      searchResults,
+      tabCache,
+    });
+
     destroyPlayer();
     if (usingMpv) mpvStop().catch(() => {});
     document.removeEventListener('fullscreenchange', handleFullscreenChange);
@@ -393,11 +487,14 @@
     selectedGroup = null;
     groupChannels = [];
     tabGroups = [];
+    tabCache = {};
     stopPlaying();
     if (p) {
       loadContentTypeCounts(p.id);
       activeTab = 'live';
       loadGroupsForTab(p.id, 'live');
+      setSetting('last_playlist_id', String(p.id)).catch(() => {});
+      setSetting('last_active_tab', 'live').catch(() => {});
     }
   }
 
@@ -416,10 +513,21 @@
   }
 
   function switchTab(tab: 'live' | 'vod' | 'series') {
+    if (tab === activeTab) return;
+    // Save current tab's state before switching
+    saveCurrentTabState();
     activeTab = tab;
-    clearSearch();
-    const p = $selectedPlaylist;
-    if (p) loadGroupsForTab(p.id, tab);
+    setSetting('last_active_tab', tab).catch(() => {});
+    // Try to restore cached state for the target tab
+    const restored = restoreTabState(tab);
+    if (!restored) {
+      const p = $selectedPlaylist;
+      if (p) loadGroupsForTab(p.id, tab);
+    }
+    // Re-run search for the new tab if there's an active query
+    if (searchQuery.trim()) {
+      handleSearchInput(searchQuery);
+    }
   }
 
   const RECENTLY_ADDED = '__recently_added__';
@@ -507,16 +615,13 @@
         usingMpv = false;
       }
     } else {
-      // VOD/series → external player or browser
+      // VOD/series → always use external player (MPV/VLC)
       destroyPlayer();
       playingChannel = ch;
       playStartTime = Date.now();
       playerError = '';
-      playerLoading = true;
       usingMpv = false;
-      requestAnimationFrame(() => {
-        if (videoEl) setupStream(ch.stream_url);
-      });
+      await openInExternalPlayer(ch.stream_url);
     }
   }
 
@@ -602,6 +707,7 @@
     groupChannels = [ch];
     hasMore = false;
     if (activeTab === 'series') openSeries(ch);
+    else if (activeTab === 'vod') openVod(ch);
     else playChannel(ch);
   }
 
@@ -725,8 +831,51 @@
     selectedSeason = null;
   }
 
-  function playEpisode(streamUrl: string, title: string) {
-    // Create a fake channel to play the episode in the inline player
+  async function openVod(ch: Channel) {
+    const p = $selectedPlaylist;
+    if (!p) return;
+    if (p.source_type !== 'xtream') {
+      // Non-xtream: just play directly, no detail page
+      await openInExternalPlayer(ch.stream_url);
+      return;
+    }
+    if (!p.source_url || !p.xtream_username || !p.xtream_password) return;
+
+    viewingVod = ch;
+    vodDetail = null;
+    vodLoading = true;
+    vodError = '';
+
+    // Extract vod_id from stream_url: http://server/movie/user/pass/{id}.ext
+    const filename = ch.stream_url.split('/').pop() || '';
+    const vodId = parseInt(filename.split('.')[0]);
+    if (isNaN(vodId)) {
+      vodError = `Could not extract VOD ID from URL: ${ch.stream_url}`;
+      vodLoading = false;
+      return;
+    }
+
+    try {
+      vodDetail = await getVodInfo(p.source_url, p.xtream_username, p.xtream_password, vodId);
+    } catch (e) {
+      vodError = String(e);
+    } finally {
+      vodLoading = false;
+    }
+  }
+
+  function closeVod() {
+    viewingVod = null;
+    vodDetail = null;
+    vodError = '';
+  }
+
+  async function playVod() {
+    if (!viewingVod) return;
+    await openInExternalPlayer(viewingVod.stream_url);
+  }
+
+  async function playEpisode(streamUrl: string, title: string) {
     if (playingChannel && playStartTime) {
       const duration = Math.floor((Date.now() - playStartTime) / 1000);
       if (duration > 5) recordViewing(playingChannel.id, duration).catch(() => {});
@@ -739,13 +888,11 @@
     };
     playStartTime = Date.now();
     playerError = '';
-    playerLoading = true;
-    requestAnimationFrame(() => {
-      if (videoEl) setupStream(streamUrl);
-    });
+    usingMpv = false;
+    await openInExternalPlayer(streamUrl);
   }
 
-  function getBackdrop(info: SeriesDetail['info']): string | null {
+  function getBackdrop(info: { backdrop_path?: unknown }): string | null {
     if (!info.backdrop_path) return null;
     if (Array.isArray(info.backdrop_path) && info.backdrop_path.length > 0) return info.backdrop_path[0];
     if (typeof info.backdrop_path === 'string') return info.backdrop_path;
@@ -849,9 +996,63 @@
     </div>
   </div>
 
+  {#if !$selectedPlaylist}
+    <!-- Welcome page spanning columns 2+3 -->
+    <div class="welcome-page">
+      <div class="welcome-content">
+        <div class="welcome-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2">
+            <rect x="2" y="3" width="20" height="14" rx="3"/>
+            <path d="M8 21h8M12 17v4"/>
+            <polygon points="10 7.5 10 12.5 14.5 10 10 7.5" fill="currentColor" stroke="none"/>
+          </svg>
+        </div>
+        <h2 class="welcome-title">Welcome to JoTV</h2>
+        <p class="welcome-desc">Select a playlist from the left to start watching, or add a new one.</p>
+
+        <div class="welcome-features">
+          <div class="welcome-feature">
+            <div class="feature-icon live">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+            </div>
+            <div class="feature-text">
+              <strong>Live TV</strong>
+              <span>Watch live channels with MPV</span>
+            </div>
+          </div>
+          <div class="welcome-feature">
+            <div class="feature-icon vod">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            </div>
+            <div class="feature-text">
+              <strong>Movies</strong>
+              <span>Browse and play VOD content</span>
+            </div>
+          </div>
+          <div class="welcome-feature">
+            <div class="feature-icon series">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="2" width="20" height="20" rx="2"/><path d="M7 2v20M17 2v20M2 12h20"/></svg>
+            </div>
+            <div class="feature-text">
+              <strong>Series</strong>
+              <span>Seasons, episodes & details</span>
+            </div>
+          </div>
+        </div>
+
+        {#if $playlists.length === 0}
+          <button class="welcome-add-btn" onclick={() => showAddModal = true}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            Add Your First Playlist
+          </button>
+        {:else}
+          <p class="welcome-hint">Select a playlist to get started</p>
+        {/if}
+      </div>
+    </div>
+  {:else}
   <!-- Column 2: Groups -->
   <div class="col col-groups">
-    {#if $selectedPlaylist}
       <div class="col-header">
         <h2 class="truncate" title={$selectedPlaylist.name}>{$selectedPlaylist.name}</h2>
         <div class="header-actions">
@@ -1001,158 +1202,92 @@
           {/each}
         {/if}
       </div>
-    {:else}
-      <div class="col-placeholder">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 6h16M4 10h16M4 14h10"/></svg>
-        <p>Select a playlist</p>
-      </div>
-    {/if}
   </div>
 
   <!-- Column 3: Channels + Inline Player -->
   <div class="col col-channels">
     {#if selectedGroup !== null}
-      <!-- Player panel -->
-      {#if playingChannel}
-        {#if usingMpv}
-          <!-- MPV player controls -->
-          <div class="mpv-panel">
-            <div class="mpv-display">
-              {#if playingChannel.logo_url}
-                <img class="mpv-logo" src={playingChannel.logo_url} alt="" />
+      <!-- Player panel (live only — VOD/series open in external player) -->
+      {#if playingChannel && usingMpv}
+        <div class="mpv-panel">
+          <div class="mpv-display">
+            {#if playingChannel.logo_url}
+              <img class="mpv-logo" src={playingChannel.logo_url} alt="" />
+            {:else}
+              <div class="mpv-logo placeholder">
+                <span>{playingChannel.name.charAt(0).toUpperCase()}</span>
+              </div>
+            {/if}
+            <div class="mpv-info">
+              <h3>{playingChannel.name}</h3>
+              <span class="mpv-group">{playingChannel.group_name}</span>
+              {#if playerLoading}
+                <span class="mpv-status loading">Starting MPV...</span>
+              {:else if playerError}
+                <span class="mpv-status error">{playerError}</span>
               {:else}
-                <div class="mpv-logo placeholder">
-                  <span>{playingChannel.name.charAt(0).toUpperCase()}</span>
-                </div>
+                <span class="mpv-status live">Playing in MPV</span>
               {/if}
-              <div class="mpv-info">
-                <h3>{playingChannel.name}</h3>
-                <span class="mpv-group">{playingChannel.group_name}</span>
-                {#if playerLoading}
-                  <span class="mpv-status loading">Starting MPV...</span>
-                {:else if playerError}
-                  <span class="mpv-status error">{playerError}</span>
-                {:else}
-                  <span class="mpv-status live">Playing in MPV</span>
-                {/if}
-              </div>
-            </div>
-            <div class="mpv-controls">
-              <button class="mpv-btn" onclick={() => mpvPause()} title="Pause/Play">
-                <svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
-              </button>
-              <button class="mpv-btn" onclick={() => mpvFullscreen()} title="Fullscreen">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><polyline points="21 3 14 10"/><polyline points="3 21 10 14"/></svg>
-              </button>
-              <button class="mpv-btn stop" onclick={stopPlaying} title="Stop">
-                <svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>
-              </button>
             </div>
           </div>
-        {:else}
-          <!-- Browser inline player (VOD/series) -->
-          <div class="inline-player" bind:this={playerContainerEl}>
-            <div class="player-wrapper">
-              <!-- svelte-ignore a11y_media_has_caption -->
-              <video
-                bind:this={videoEl}
-                autoplay playsinline preload="auto"
-                onplay={() => { playerPaused = false; playerLoading = false; }}
-                onpause={() => { playerPaused = true; }}
-                onwaiting={() => { playerLoading = true; }}
-                onplaying={() => { playerLoading = false; playerError = ''; retryCount = 0; }}
-                onstalled={() => { if (!playerPaused) playerLoading = true; }}
-                onerror={() => { if (playingChannel && !hls && !mpegtsPlayer) scheduleRetry(() => { if (playingChannel) setupStream(playingChannel.stream_url); }); }}
-                class="player-video"
-              ></video>
-              {#if playerLoading && !playerError && !vodPlayingExternal}
-                <div class="player-overlay"><div class="spinner"></div></div>
-              {/if}
-              {#if vodPlayingExternal}
-                <div class="player-overlay external">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="external-icon"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
-                  <span class="external-text">Playing in {externalPlayers[0]?.name ?? 'external player'}</span>
-                </div>
-              {/if}
-              {#if playerError}
-                <div class="player-overlay"><span class="player-error-text">{playerError}</span></div>
-              {/if}
-            </div>
-            <div class="player-bar">
-              <div class="player-info">
-                {#if playingChannel.logo_url}
-                  <img class="player-ch-icon" src={playingChannel.logo_url} alt="" />
-                {/if}
-                <span class="player-ch-name">{playingChannel.name}</span>
-              </div>
-              <div class="player-controls">
-                {#if !vodPlayingExternal}
-                  <button class="ctrl-btn" onclick={togglePlay} title={playerPaused ? 'Play' : 'Pause'}>
-                    {#if playerPaused}
-                      <svg viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-                    {:else}
-                      <svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
-                    {/if}
-                  </button>
-                  <button class="ctrl-btn" onclick={toggleFullscreen} title="Fullscreen">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><polyline points="21 3 14 10"/><polyline points="3 21 10 14"/></svg>
-                  </button>
-                {/if}
-                {#if externalPlayers.length > 0}
-                  <button class="ctrl-btn" onclick={() => openCurrentInPlayer(0)} title="Open in {externalPlayers[0].name}">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
-                  </button>
-                {/if}
-                <button class="ctrl-btn" onclick={stopPlaying} title="Close">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                </button>
-              </div>
-            </div>
+          <div class="mpv-controls">
+            <button class="mpv-btn" onclick={() => mpvPause()} title="Pause/Play">
+              <svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+            </button>
+            <button class="mpv-btn" onclick={() => mpvFullscreen()} title="Fullscreen">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><polyline points="21 3 14 10"/><polyline points="3 21 10 14"/></svg>
+            </button>
+            <button class="mpv-btn stop" onclick={stopPlaying} title="Stop">
+              <svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>
+            </button>
           </div>
-        {/if}
+        </div>
       {/if}
 
-      <!-- Series detail overlay -->
+      <!-- Series detail page -->
       {#if viewingSeries && activeTab === 'series'}
-        <div class="series-detail">
+        <div class="vod-detail">
           {#if seriesLoading}
             <div class="col-empty">Loading series info...</div>
           {:else if seriesDetail}
-            {@const backdrop = getBackdrop(seriesDetail.info)}
-            <!-- Series hero -->
-            <div class="series-hero" style={backdrop ? `background-image: url(${backdrop})` : ''}>
-              <div class="series-hero-overlay">
-                {#if seriesDetail.info.cover}
-                  <img class="series-poster" src={seriesDetail.info.cover} alt="" />
+            {@const info = seriesDetail.info}
+            {@const backdrop = getBackdrop(info) || info.cover || viewingSeries?.logo_url}
+            <div class="vod-hero" style={backdrop ? `background-image: url(${backdrop})` : ''}>
+              <div class="vod-hero-overlay">
+                {#if info.cover || viewingSeries.logo_url}
+                  <img class="vod-poster" src={info.cover || viewingSeries.logo_url} alt="" />
                 {/if}
-                <div class="series-meta">
-                  <h2>{seriesDetail.info.name || viewingSeries.name}</h2>
-                  {#if seriesDetail.info.genre}
-                    <span class="series-genre">{seriesDetail.info.genre}</span>
+                <div class="vod-meta">
+                  <h2>{info.name || viewingSeries.name}</h2>
+                  {#if info.genre}
+                    <span class="vod-genre">{info.genre}</span>
                   {/if}
-                  <div class="series-tags">
-                    {#if seriesDetail.info.rating}
-                      <span class="series-tag">&#9733; {seriesDetail.info.rating}</span>
+                  <div class="vod-tags">
+                    {#if info.rating}
+                      <span class="vod-tag">&#9733; {info.rating}</span>
                     {/if}
-                    {#if seriesDetail.info.release_date}
-                      <span class="series-tag">{seriesDetail.info.release_date}</span>
+                    {#if info.release_date}
+                      <span class="vod-tag">{info.release_date}</span>
                     {/if}
-                    <span class="series-tag">{seriesDetail.seasons.length} seasons</span>
+                    <span class="vod-tag">{seriesDetail.seasons.length} seasons</span>
                   </div>
-                  {#if seriesDetail.info.plot}
-                    <p class="series-plot">{seriesDetail.info.plot}</p>
+                  {#if info.director}
+                    <p class="vod-director"><strong>Director:</strong> {info.director}</p>
                   {/if}
-                  {#if seriesDetail.info.cast}
-                    <p class="series-cast">{seriesDetail.info.cast}</p>
+                  {#if info.cast}
+                    <p class="vod-cast"><strong>Cast:</strong> {info.cast}</p>
+                  {/if}
+                  {#if info.plot}
+                    <p class="vod-plot">{info.plot}</p>
                   {/if}
                 </div>
-                <button class="series-close-btn" onclick={closeSeries} title="Back">
+                <button class="vod-close-btn" onclick={closeSeries} title="Back">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                 </button>
               </div>
             </div>
 
-            <!-- Season tabs -->
+            <!-- Season tabs + Episodes -->
             <div class="season-tabs">
               {#each seriesDetail.seasons as season (season.season_number)}
                 <button
@@ -1165,8 +1300,7 @@
               {/each}
             </div>
 
-            <!-- Episodes list -->
-            <div class="col-scroll">
+            <div class="episodes-section">
               {#each seriesDetail.seasons.filter(s => s.season_number === selectedSeason) as season (season.season_number)}
                 <div class="episodes-list">
                   {#each season.episodes as ep (ep.id)}
@@ -1197,8 +1331,34 @@
                 </div>
               {/each}
             </div>
+
+            <!-- More from same group -->
+            {@const related = groupChannels.filter(ch => ch.id !== viewingSeries?.id)}
+            {#if related.length > 0}
+              <div class="vod-related">
+                <h3 class="vod-related-title">More from {viewingSeries?.group_name || 'this category'}</h3>
+                <div class="vod-related-grid">
+                  {#each related as ch (ch.id)}
+                    <button class="content-card" onclick={() => openSeries(ch)}>
+                      <div class="content-card-btn">
+                        {#if ch.logo_url}
+                          <img class="content-thumb" src={ch.logo_url} alt="" loading="lazy" />
+                        {:else}
+                          <div class="content-thumb placeholder">
+                            <span>{ch.name.charAt(0).toUpperCase()}</span>
+                          </div>
+                        {/if}
+                      </div>
+                      <div class="content-card-footer">
+                        <span class="content-title" title={ch.name}>{ch.name}</span>
+                      </div>
+                    </button>
+                  {/each}
+                </div>
+              </div>
+            {/if}
           {:else}
-            <div class="series-error">
+            <div class="vod-error-panel">
               <p>Failed to load series</p>
               {#if seriesError}
                 <span class="error-detail">{seriesError}</span>
@@ -1211,7 +1371,114 @@
           {/if}
         </div>
 
-      <!-- Regular channel list / series grid -->
+      <!-- VOD detail overlay -->
+      {:else if viewingVod && activeTab === 'vod'}
+        <div class="vod-detail">
+          {#if vodLoading}
+            <div class="col-empty">Loading movie info...</div>
+          {:else if vodDetail}
+            {@const info = vodDetail.info}
+            {@const backdrop = getBackdrop(info) || info.cover || viewingVod?.logo_url}
+            <div class="vod-hero" style={backdrop ? `background-image: url(${backdrop})` : ''}>
+              <div class="vod-hero-overlay">
+                {#if info.cover || viewingVod.logo_url}
+                  <img class="vod-poster" src={info.cover || viewingVod.logo_url} alt="" />
+                {/if}
+                <div class="vod-meta">
+                  <h2>{info.name || viewingVod.name}</h2>
+                  {#if info.genre}
+                    <span class="vod-genre">{info.genre}</span>
+                  {/if}
+                  <div class="vod-tags">
+                    {#if info.rating}
+                      <span class="vod-tag">&#9733; {info.rating}</span>
+                    {/if}
+                    {#if info.release_date}
+                      <span class="vod-tag">{info.release_date}</span>
+                    {/if}
+                    {#if info.duration}
+                      <span class="vod-tag">{info.duration}</span>
+                    {/if}
+                  </div>
+                  {#if info.director}
+                    <p class="vod-director"><strong>Director:</strong> {info.director}</p>
+                  {/if}
+                  {#if info.cast}
+                    <p class="vod-cast"><strong>Cast:</strong> {info.cast}</p>
+                  {/if}
+                  {#if info.plot}
+                    <p class="vod-plot">{info.plot}</p>
+                  {/if}
+                  <div class="vod-actions">
+                    <button class="vod-play-btn" onclick={playVod}>
+                      <svg viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                      Play
+                    </button>
+                    <button
+                      class="vod-dl-btn"
+                      class:downloading={dlProgressMap.has(viewingVod.id)}
+                      onclick={() => { if (viewingVod) downloadChannel(viewingVod); }}
+                    >
+                      {#if dlProgressMap.has(viewingVod.id)}
+                        <svg class="dl-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg>
+                        {Math.round((dlProgressMap.get(viewingVod.id)?.progress ?? 0) * 100)}%
+                      {:else}
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                        Download
+                      {/if}
+                    </button>
+                  </div>
+                </div>
+                <button class="vod-close-btn" onclick={closeVod} title="Back">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+              </div>
+            </div>
+
+            <!-- More from same group -->
+            {@const related = groupChannels.filter(ch => ch.id !== viewingVod?.id)}
+            {#if related.length > 0}
+              <div class="vod-related">
+                <h3 class="vod-related-title">More from {viewingVod?.group_name || 'this category'}</h3>
+                <div class="vod-related-grid">
+                  {#each related as ch (ch.id)}
+                    <button class="content-card" onclick={() => openVod(ch)}>
+                      <div class="content-card-btn">
+                        {#if ch.logo_url}
+                          <img class="content-thumb" src={ch.logo_url} alt="" loading="lazy" />
+                        {:else}
+                          <div class="content-thumb placeholder">
+                            <span>{ch.name.charAt(0).toUpperCase()}</span>
+                          </div>
+                        {/if}
+                      </div>
+                      <div class="content-card-footer">
+                        <span class="content-title" title={ch.name}>{ch.name}</span>
+                      </div>
+                    </button>
+                  {/each}
+                </div>
+              </div>
+            {/if}
+          {:else}
+            <div class="vod-error-panel">
+              <p>Failed to load movie info</p>
+              {#if vodError}
+                <span class="error-detail">{vodError}</span>
+              {/if}
+              <div class="error-actions">
+                <button class="btn-ghost" onclick={() => { if (viewingVod) openVod(viewingVod); }}>Retry</button>
+                <button class="vod-play-btn" onclick={playVod}>
+                  <svg viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                  Play Anyway
+                </button>
+                <button class="btn-ghost" onclick={closeVod}>Back</button>
+              </div>
+            </div>
+          {/if}
+        </div>
+
+      <!-- Regular channel list / grid -->
       {:else}
         <div class="col-header">
           <h2 class="truncate" title={selectedGroup === RECENTLY_ADDED ? 'Recently Added' : (selectedGroup || 'Uncategorized')}>{selectedGroup === RECENTLY_ADDED ? 'Recently Added' : (selectedGroup || 'Uncategorized')}</h2>
@@ -1223,91 +1490,77 @@
             <div class="col-empty">Loading...</div>
           {:else if groupChannels.length === 0}
             <div class="col-empty">No channels</div>
-          {:else if activeTab === 'series'}
-            <!-- Series thumbnail grid -->
-            <div class="series-grid">
+          {:else}
+            <!-- Grid cards for all tabs -->
+            <div class="content-grid" class:live-grid={activeTab === 'live'}>
               {#each groupChannels as ch (ch.id)}
-                <button class="series-card" onclick={() => openSeries(ch)}>
-                  {#if ch.logo_url}
-                    <img class="series-thumb" src={ch.logo_url} alt="" loading="lazy" />
-                  {:else}
-                    <div class="series-thumb placeholder">
-                      <span>{ch.name.charAt(0).toUpperCase()}</span>
+                <div class="content-card" class:active={playingChannel?.id === ch.id}>
+                  <button class="content-card-btn" onclick={() => activeTab === 'series' ? openSeries(ch) : activeTab === 'vod' ? openVod(ch) : playChannel(ch)}>
+                    {#if ch.logo_url}
+                      <img class="content-thumb" class:landscape={activeTab === 'live'} src={ch.logo_url} alt="" loading="lazy" />
+                    {:else}
+                      <div class="content-thumb placeholder" class:landscape={activeTab === 'live'}>
+                        <span>{ch.name.charAt(0).toUpperCase()}</span>
+                      </div>
+                    {/if}
+                    {#if playingChannel?.id === ch.id}
+                      <div class="card-now-playing">
+                        <span class="bar"></span><span class="bar"></span><span class="bar"></span>
+                      </div>
+                    {/if}
+                    {#if dlProgressMap.has(ch.id)}
+                      {@const dlp = dlProgressMap.get(ch.id)}
+                      <div class="card-dl-overlay">
+                        <div class="card-dl-bar" style="width: {(dlp?.progress ?? 0) * 100}%"></div>
+                        <span class="card-dl-pct">{Math.round((dlp?.progress ?? 0) * 100)}%</span>
+                      </div>
+                    {/if}
+                  </button>
+                  <div class="content-card-footer">
+                    <span class="content-title" title={ch.name}>{ch.name}</span>
+                    <div class="content-card-actions">
+                      {#if activeTab === 'vod'}
+                        <button
+                          class="card-action-btn"
+                          class:downloading={downloadingSet.has(ch.id)}
+                          onclick={(e) => { e.stopPropagation(); downloadChannel(ch); }}
+                          title={downloadingSet.has(ch.id) ? 'Downloading...' : 'Download'}
+                        >
+                          {#if downloadingSet.has(ch.id)}
+                            <svg class="dl-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg>
+                          {:else}
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                          {/if}
+                        </button>
+                      {/if}
+                      <div class="fav-wrapper">
+                        <button
+                          class="card-action-btn"
+                          class:is-fav={favSet.has(ch.id)}
+                          onclick={(e) => { e.stopPropagation(); quickToggleFav(ch.id); }}
+                          title={favSet.has(ch.id) ? 'Remove from favorites' : 'Add to favorites'}
+                        >
+                          {#if favSet.has(ch.id)}
+                            <svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
+                          {:else}
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
+                          {/if}
+                        </button>
+                        {#if favMenuChannelId === ch.id}
+                          <div class="fav-menu">
+                            {#each FAV_CATEGORIES as cat}
+                              <button class="fav-menu-item" onclick={(e) => { e.stopPropagation(); toggleFav(ch.id, cat); }}>
+                                {cat}
+                              </button>
+                            {/each}
+                          </div>
+                        {/if}
+                      </div>
                     </div>
-                  {/if}
-                  <span class="series-title">{ch.name}</span>
-                </button>
+                  </div>
+                </div>
               {/each}
             </div>
-            {#if hasMore}
-              <button class="load-more-btn" onclick={loadMore} disabled={channelsLoading}>
-                {channelsLoading ? 'Loading...' : 'Load More'}
-              </button>
-            {/if}
-          {:else}
-            <!-- Live / VOD channel list -->
-            {#each groupChannels as ch (ch.id)}
-              <div class="channel-row" class:active={playingChannel?.id === ch.id}>
-                <button
-                  class="channel-item"
-                  onclick={() => playChannel(ch)}
-                >
-                  {#if ch.logo_url}
-                    <img class="channel-icon" src={ch.logo_url} alt="" loading="lazy" />
-                  {:else}
-                    <div class="channel-icon placeholder">
-                      <span>{ch.name.charAt(0).toUpperCase()}</span>
-                    </div>
-                  {/if}
-                  <span class="channel-name" title={ch.name}>{ch.name}</span>
-                  {#if playingChannel?.id === ch.id}
-                    <div class="now-playing">
-                      <span class="bar"></span><span class="bar"></span><span class="bar"></span>
-                    </div>
-                  {/if}
-                </button>
-                <!-- Download button (VOD only) -->
-                {#if activeTab === 'vod'}
-                  <button
-                    class="dl-btn"
-                    class:downloading={downloadingSet.has(ch.id)}
-                    onclick={(e) => { e.stopPropagation(); downloadChannel(ch); }}
-                    title={downloadingSet.has(ch.id) ? 'Downloading...' : 'Download'}
-                  >
-                    {#if downloadingSet.has(ch.id)}
-                      <svg class="dl-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg>
-                    {:else}
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                    {/if}
-                  </button>
-                {/if}
-                <!-- Favorite button -->
-                <div class="fav-wrapper">
-                  <button
-                    class="fav-btn"
-                    class:is-fav={favSet.has(ch.id)}
-                    onclick={(e) => { e.stopPropagation(); quickToggleFav(ch.id); }}
-                    title={favSet.has(ch.id) ? 'Remove from favorites' : 'Add to favorites'}
-                  >
-                    {#if favSet.has(ch.id)}
-                      <svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
-                    {:else}
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
-                    {/if}
-                  </button>
-                  <!-- Category picker dropdown -->
-                  {#if favMenuChannelId === ch.id}
-                    <div class="fav-menu">
-                      {#each FAV_CATEGORIES as cat}
-                        <button class="fav-menu-item" onclick={(e) => { e.stopPropagation(); toggleFav(ch.id, cat); }}>
-                          {cat}
-                        </button>
-                      {/each}
-                    </div>
-                  {/if}
-                </div>
-              </div>
-            {/each}
             {#if hasMore}
               <button class="load-more-btn" onclick={loadMore} disabled={channelsLoading}>
                 {channelsLoading ? 'Loading...' : 'Load More'}
@@ -1323,6 +1576,7 @@
       </div>
     {/if}
   </div>
+  {/if}
 </div>
 
 {#if showAddModal}
@@ -1336,6 +1590,152 @@
     height: calc(100vh - 48px);
     margin: -24px;
     background: var(--color-base);
+  }
+
+  /* Welcome page */
+  .welcome-page {
+    grid-column: 2 / -1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-left: 1px solid var(--color-border);
+    background: linear-gradient(135deg, var(--color-base) 0%, rgba(233, 69, 96, 0.03) 100%);
+  }
+
+  .welcome-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+    max-width: 400px;
+    text-align: center;
+    padding: 40px;
+  }
+
+  .welcome-icon {
+    width: 72px;
+    height: 72px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(233, 69, 96, 0.1);
+    border-radius: 20px;
+    color: var(--color-accent);
+    margin-bottom: 4px;
+  }
+
+  .welcome-icon :global(svg) {
+    width: 36px;
+    height: 36px;
+  }
+
+  .welcome-title {
+    font-size: 24px;
+    font-weight: 700;
+    color: var(--color-text);
+  }
+
+  .welcome-desc {
+    font-size: 14px;
+    color: var(--color-text-muted);
+    line-height: 1.5;
+  }
+
+  .welcome-features {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    width: 100%;
+    margin-top: 8px;
+  }
+
+  .welcome-feature {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 12px 16px;
+    background: var(--color-card);
+    border: 1px solid var(--color-border);
+    border-radius: 12px;
+    text-align: left;
+  }
+
+  .feature-icon {
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 10px;
+    flex-shrink: 0;
+  }
+
+  .feature-icon :global(svg) {
+    width: 20px;
+    height: 20px;
+  }
+
+  .feature-icon.live {
+    background: rgba(233, 69, 96, 0.1);
+    color: var(--color-accent);
+  }
+
+  .feature-icon.vod {
+    background: rgba(166, 227, 161, 0.1);
+    color: var(--color-accent-green);
+  }
+
+  .feature-icon.series {
+    background: rgba(137, 180, 250, 0.1);
+    color: #89b4fa;
+  }
+
+  .feature-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .feature-text strong {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--color-text);
+  }
+
+  .feature-text span {
+    font-size: 11px;
+    color: var(--color-text-muted);
+  }
+
+  .welcome-add-btn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 28px;
+    border-radius: 10px;
+    background: var(--color-accent);
+    color: #fff;
+    font-size: 14px;
+    font-weight: 600;
+    margin-top: 8px;
+    transition: all 0.15s;
+  }
+
+  .welcome-add-btn:hover {
+    transform: scale(1.03);
+    box-shadow: 0 6px 20px rgba(233, 69, 96, 0.3);
+  }
+
+  .welcome-add-btn :global(svg) {
+    width: 18px;
+    height: 18px;
+  }
+
+  .welcome-hint {
+    font-size: 12px;
+    color: var(--color-text-muted);
+    opacity: 0.6;
+    margin-top: 4px;
   }
 
   .truncate {
@@ -1860,149 +2260,8 @@
   }
 
   /* Column 3 - Inline Player + Channels */
-  .inline-player {
-    flex-shrink: 0;
-    border-bottom: 1px solid var(--color-border);
-    background: #000;
-  }
-
-  .inline-player:fullscreen {
-    display: flex;
-    flex-direction: column;
-  }
-
-  .inline-player:fullscreen .player-wrapper {
-    flex: 1;
-    max-height: none;
-    aspect-ratio: auto;
-  }
-
-  .player-wrapper {
-    width: 100%;
-    aspect-ratio: 16 / 9;
-    max-height: 280px;
-    background: #000;
-    position: relative;
-  }
-
-  .player-video {
-    width: 100%;
-    height: 100%;
-    object-fit: contain;
-    background: #000;
-  }
-
-  .player-overlay {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: rgba(0, 0, 0, 0.5);
-    pointer-events: none;
-  }
-
-  .spinner {
-    width: 36px;
-    height: 36px;
-    border: 3px solid rgba(255, 255, 255, 0.15);
-    border-top-color: var(--color-accent);
-    border-radius: 50%;
-    animation: spin 0.8s linear infinite;
-  }
-
   @keyframes spin {
     to { transform: rotate(360deg); }
-  }
-
-  .player-error-text {
-    font-size: 13px;
-    color: var(--color-accent);
-    background: rgba(0, 0, 0, 0.6);
-    padding: 6px 14px;
-    border-radius: 8px;
-  }
-
-  .player-overlay.external {
-    flex-direction: column;
-    gap: 8px;
-    background: rgba(0, 0, 0, 0.7);
-    pointer-events: none;
-  }
-
-  .external-icon {
-    width: 40px;
-    height: 40px;
-    color: var(--color-accent-green);
-    opacity: 0.8;
-  }
-
-  .external-text {
-    font-size: 13px;
-    color: rgba(255,255,255,0.7);
-  }
-
-  .player-bar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 6px 12px;
-    background: var(--color-card);
-    gap: 8px;
-  }
-
-  .player-info {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    min-width: 0;
-    flex: 1;
-  }
-
-  .player-ch-icon {
-    width: 24px;
-    height: 24px;
-    border-radius: 4px;
-    object-fit: contain;
-    background: var(--color-surface);
-    flex-shrink: 0;
-  }
-
-  .player-ch-name {
-    font-size: 13px;
-    font-weight: 600;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .player-controls {
-    display: flex;
-    align-items: center;
-    gap: 2px;
-    flex-shrink: 0;
-  }
-
-  .ctrl-btn {
-    width: 32px;
-    height: 32px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: 6px;
-    background: transparent;
-    color: var(--color-text-muted);
-    transition: all var(--transition-fast);
-  }
-
-  .ctrl-btn:hover {
-    background: var(--color-hover);
-    color: var(--color-text);
-  }
-
-  .ctrl-btn :global(svg) {
-    width: 16px;
-    height: 16px;
   }
 
   .channel-total {
@@ -2014,54 +2273,6 @@
     flex-shrink: 0;
   }
 
-  .channel-row {
-    display: flex;
-    align-items: center;
-    border-radius: 8px;
-    margin-bottom: 1px;
-    transition: background var(--transition-fast);
-  }
-
-  .channel-row:hover {
-    background: var(--color-hover);
-  }
-
-  .channel-row.active {
-    background: rgba(233, 69, 96, 0.08);
-  }
-
-  .channel-item {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    flex: 1;
-    min-width: 0;
-    text-align: left;
-    padding: 6px 10px;
-    background: transparent;
-    color: var(--color-text);
-  }
-
-  /* Favorite button */
-  /* Download button */
-  .dl-btn {
-    width: 28px;
-    height: 28px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: 6px;
-    background: transparent;
-    color: var(--color-text-muted);
-    opacity: 0;
-    transition: all var(--transition-fast);
-    flex-shrink: 0;
-  }
-
-  .channel-row:hover .dl-btn { opacity: 1; }
-  .dl-btn.downloading { opacity: 1; color: var(--color-accent-green); }
-  .dl-btn:hover { background: var(--color-surface); color: var(--color-accent-green); }
-  .dl-btn :global(svg) { width: 15px; height: 15px; }
   .dl-spin { animation: spin 1s linear infinite; }
 
   .ep-dl-btn {
@@ -2103,7 +2314,6 @@
     transition: all var(--transition-fast);
   }
 
-  .channel-row:hover .fav-btn,
   .fav-btn.is-fav {
     opacity: 1;
   }
@@ -2151,36 +2361,6 @@
     color: var(--color-accent);
   }
 
-  .channel-icon {
-    width: 36px;
-    height: 36px;
-    border-radius: 8px;
-    object-fit: contain;
-    background: var(--color-surface);
-    flex-shrink: 0;
-  }
-
-  .channel-icon.placeholder {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-
-  .channel-icon.placeholder span {
-    font-size: 14px;
-    font-weight: 700;
-    color: var(--color-accent);
-    opacity: 0.5;
-  }
-
-  .channel-name {
-    flex: 1;
-    font-size: 13px;
-    font-weight: 500;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
 
   /* Now playing bars animation */
   .now-playing {
@@ -2225,51 +2405,135 @@
   }
 
   /* Series thumbnail grid */
-  .series-grid {
+  .content-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
     gap: 12px;
     padding: 8px;
   }
 
-  .series-card {
+  .content-grid.live-grid {
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  }
+
+  .content-card {
     display: flex;
     flex-direction: column;
     background: var(--color-card);
     border: 1px solid var(--color-border);
     border-radius: 10px;
     overflow: hidden;
-    text-align: left;
     transition: transform var(--transition-fast), box-shadow var(--transition-fast);
   }
 
-  .series-card:hover {
+  .content-card:hover {
     transform: translateY(-3px);
     box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
   }
 
-  .series-thumb {
+  .content-card.active {
+    border-color: var(--color-accent);
+    box-shadow: 0 0 0 1px var(--color-accent);
+  }
+
+  .content-card-btn {
+    position: relative;
+    display: block;
+    width: 100%;
+    padding: 0;
+    border: none;
+    background: none;
+    cursor: pointer;
+  }
+
+  .content-thumb {
     width: 100%;
     aspect-ratio: 2 / 3;
     object-fit: cover;
     background: var(--color-surface);
+    display: block;
   }
 
-  .series-thumb.placeholder {
+  .content-thumb.landscape {
+    aspect-ratio: 16 / 10;
+    object-fit: contain;
+  }
+
+  .content-thumb.placeholder {
     display: flex;
     align-items: center;
     justify-content: center;
   }
 
-  .series-thumb.placeholder span {
+  .content-thumb.placeholder span {
     font-size: 32px;
     font-weight: 700;
     color: var(--color-accent);
     opacity: 0.3;
   }
 
-  .series-title {
+  .card-now-playing {
+    position: absolute;
+    bottom: 6px;
+    right: 6px;
+    display: flex;
+    gap: 2px;
+    align-items: flex-end;
+    height: 14px;
+    background: rgba(0, 0, 0, 0.6);
+    border-radius: 4px;
+    padding: 2px 4px;
+  }
+
+  .card-now-playing .bar {
+    width: 3px;
+    background: var(--color-accent);
+    border-radius: 1px;
+    animation: bar-bounce 0.8s ease-in-out infinite alternate;
+  }
+
+  .card-now-playing .bar:nth-child(1) { height: 40%; animation-delay: 0s; }
+  .card-now-playing .bar:nth-child(2) { height: 70%; animation-delay: 0.2s; }
+  .card-now-playing .bar:nth-child(3) { height: 50%; animation-delay: 0.4s; }
+
+  .card-dl-overlay {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 24px;
+    background: rgba(0, 0, 0, 0.75);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .card-dl-bar {
+    position: absolute;
+    left: 0;
+    bottom: 0;
+    height: 3px;
+    background: var(--color-accent-green);
+    transition: width 0.3s ease;
+  }
+
+  .card-dl-pct {
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--color-accent-green);
+    z-index: 1;
+  }
+
+  .content-card-footer {
     padding: 6px 8px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+  }
+
+  .content-title {
+    flex: 1;
     font-size: 11px;
     font-weight: 500;
     white-space: nowrap;
@@ -2278,119 +2542,45 @@
     color: var(--color-text);
   }
 
-  /* Series detail page */
-  .series-detail {
-    display: flex;
-    flex-direction: column;
-    flex: 1;
-    overflow: hidden;
-  }
-
-  .series-hero {
-    flex-shrink: 0;
-    min-height: 280px;
-    max-height: 360px;
-    background-size: cover;
-    background-position: center top;
-    background-color: var(--color-surface);
-    position: relative;
-  }
-
-  .series-hero-overlay {
-    display: flex;
-    gap: 20px;
-    padding: 24px;
-    height: 100%;
-    background: linear-gradient(to top, rgba(0,0,0,0.95) 0%, rgba(0,0,0,0.4) 50%, rgba(0,0,0,0.6) 100%);
-    align-items: flex-end;
-    position: relative;
-  }
-
-  .series-poster {
-    width: 140px;
-    aspect-ratio: 2 / 3;
-    object-fit: cover;
-    border-radius: 10px;
-    flex-shrink: 0;
-    box-shadow: 0 8px 24px rgba(0,0,0,0.5);
-  }
-
-  .series-meta {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    min-width: 0;
-    flex: 1;
-    overflow: hidden;
-    padding-bottom: 4px;
-  }
-
-  .series-meta h2 {
-    font-size: 22px;
-    font-weight: 700;
-    color: #fff;
-    line-height: 1.2;
-  }
-
-  .series-genre {
-    font-size: 12px;
-    color: rgba(255,255,255,0.6);
-  }
-
-  .series-tags {
-    display: flex;
-    gap: 6px;
-    flex-wrap: wrap;
-  }
-
-  .series-tag {
-    font-size: 11px;
-    padding: 2px 8px;
-    border-radius: 4px;
-    background: rgba(255,255,255,0.1);
-    color: rgba(255,255,255,0.8);
-  }
-
-  .series-plot {
-    font-size: 12px;
-    color: rgba(255,255,255,0.7);
-    line-height: 1.4;
-    overflow: hidden;
-    display: -webkit-box;
-    -webkit-line-clamp: 3;
-    -webkit-box-orient: vertical;
-  }
-
-  .series-cast {
-    font-size: 11px;
-    color: rgba(255,255,255,0.5);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .series-close-btn {
-    position: absolute;
-    top: 12px;
-    right: 12px;
-    width: 32px;
-    height: 32px;
+  .content-card-actions {
     display: flex;
     align-items: center;
-    justify-content: center;
-    border-radius: 50%;
-    background: rgba(0,0,0,0.5);
-    color: #fff;
-    backdrop-filter: blur(4px);
+    gap: 2px;
+    flex-shrink: 0;
   }
 
-  .series-close-btn:hover {
-    background: rgba(255,255,255,0.2);
+  .card-action-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 2px;
+    color: var(--color-text-dim);
+    opacity: 0;
+    transition: opacity var(--transition-fast), color var(--transition-fast);
   }
 
-  .series-close-btn :global(svg) {
-    width: 16px;
-    height: 16px;
+  .content-card:hover .card-action-btn,
+  .card-action-btn.is-fav,
+  .card-action-btn.downloading {
+    opacity: 1;
+  }
+
+  .card-action-btn:hover {
+    color: var(--color-accent);
+  }
+
+  .card-action-btn.is-fav {
+    color: #e74c3c;
+  }
+
+  .card-action-btn svg {
+    width: 14px;
+    height: 14px;
+  }
+
+  /* Series detail page */
+  .episodes-section {
+    padding: 0 10px 10px;
   }
 
   /* Season tabs */
@@ -2478,23 +2668,6 @@
     color: var(--color-text);
   }
 
-  .series-error {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 10px;
-    padding: 40px 20px;
-    flex: 1;
-    text-align: center;
-  }
-
-  .series-error p {
-    font-size: 15px;
-    font-weight: 600;
-    color: var(--color-text);
-  }
-
   .error-detail {
     font-size: 12px;
     color: var(--color-accent);
@@ -2509,5 +2682,216 @@
     display: flex;
     gap: 8px;
     margin-top: 6px;
+  }
+
+  /* VOD detail page */
+  .vod-detail {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    overflow-y: auto;
+  }
+
+  .vod-hero {
+    flex-shrink: 0;
+    min-height: 360px;
+    background-size: cover;
+    background-position: center top;
+    background-color: var(--color-surface);
+    position: relative;
+  }
+
+  .vod-hero-overlay {
+    display: flex;
+    gap: 24px;
+    padding: 28px;
+    min-height: 360px;
+    background: linear-gradient(to top, rgba(0,0,0,0.97) 0%, rgba(0,0,0,0.5) 40%, rgba(0,0,0,0.6) 100%);
+    align-items: flex-end;
+    position: relative;
+  }
+
+  .vod-poster {
+    width: 180px;
+    aspect-ratio: 2 / 3;
+    object-fit: cover;
+    border-radius: 12px;
+    flex-shrink: 0;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+  }
+
+  .vod-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+    flex: 1;
+    overflow: hidden;
+    padding-bottom: 4px;
+  }
+
+  .vod-meta h2 {
+    font-size: 24px;
+    font-weight: 700;
+    color: #fff;
+    line-height: 1.2;
+  }
+
+  .vod-genre {
+    font-size: 12px;
+    color: rgba(255,255,255,0.6);
+  }
+
+  .vod-tags {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  .vod-tag {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: rgba(255,255,255,0.1);
+    color: rgba(255,255,255,0.8);
+  }
+
+  .vod-director {
+    font-size: 12px;
+    color: rgba(255,255,255,0.6);
+  }
+
+  .vod-director strong {
+    color: rgba(255,255,255,0.8);
+  }
+
+  .vod-cast {
+    font-size: 12px;
+    color: rgba(255,255,255,0.5);
+  }
+
+  .vod-cast strong {
+    color: rgba(255,255,255,0.7);
+  }
+
+  .vod-plot {
+    font-size: 13px;
+    color: rgba(255,255,255,0.75);
+    line-height: 1.5;
+    max-height: 120px;
+    overflow-y: auto;
+  }
+
+  .vod-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 8px;
+  }
+
+  .vod-play-btn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 24px;
+    border-radius: 8px;
+    background: var(--color-accent);
+    color: #fff;
+    font-size: 14px;
+    font-weight: 600;
+    transition: background var(--transition-fast), transform var(--transition-fast);
+  }
+
+  .vod-play-btn:hover {
+    background: #c73850;
+    transform: scale(1.03);
+  }
+
+  .vod-play-btn svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  .vod-dl-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 10px 18px;
+    border-radius: 8px;
+    background: rgba(255,255,255,0.1);
+    color: rgba(255,255,255,0.8);
+    font-size: 13px;
+    font-weight: 500;
+    transition: background var(--transition-fast);
+  }
+
+  .vod-dl-btn:hover {
+    background: rgba(255,255,255,0.18);
+  }
+
+  .vod-dl-btn.downloading {
+    color: var(--color-accent-green);
+  }
+
+  .vod-dl-btn svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  .vod-close-btn {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    background: rgba(0,0,0,0.5);
+    color: #fff;
+    backdrop-filter: blur(4px);
+  }
+
+  .vod-close-btn:hover {
+    background: rgba(255,255,255,0.2);
+  }
+
+  .vod-close-btn :global(svg) {
+    width: 16px;
+    height: 16px;
+  }
+
+  .vod-related {
+    padding: 20px;
+  }
+
+  .vod-related-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--color-text);
+    margin-bottom: 14px;
+  }
+
+  .vod-related-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+    gap: 12px;
+  }
+
+  .vod-error-panel {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 40px 20px;
+    flex: 1;
+    text-align: center;
+  }
+
+  .vod-error-panel p {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--color-text);
   }
 </style>

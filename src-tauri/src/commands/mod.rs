@@ -8,3 +8,4 @@ pub mod player;
 pub mod playlists;
 pub mod recommendations;
 pub mod settings;
+pub mod social;

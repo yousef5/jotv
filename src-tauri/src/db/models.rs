@@ -79,6 +79,8 @@ pub struct Download {
     pub retry_count: i64,
     pub created_at: String,
     pub completed_at: Option<String>,
+    pub channel_name: Option<String>,
+    pub channel_logo: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

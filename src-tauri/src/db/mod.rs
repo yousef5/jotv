@@ -89,6 +89,26 @@ impl Database {
             ").ok();
         }
 
+        // v4: social downloads history table
+        conn.execute_batch("
+            CREATE TABLE IF NOT EXISTS social_downloads (
+                id TEXT PRIMARY KEY,
+                url TEXT NOT NULL,
+                title TEXT NOT NULL,
+                thumbnail TEXT,
+                platform TEXT NOT NULL DEFAULT 'Other',
+                format_label TEXT,
+                output_dir TEXT,
+                file_path TEXT,
+                status TEXT NOT NULL DEFAULT 'downloading',
+                progress REAL NOT NULL DEFAULT 0.0,
+                downloaded_bytes INTEGER NOT NULL DEFAULT 0,
+                total_bytes INTEGER,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                completed_at TEXT
+            );
+        ").ok();
+
         Ok(())
     }
 }

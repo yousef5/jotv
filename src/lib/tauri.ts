@@ -73,6 +73,8 @@ export interface Download {
   retry_count: number;
   created_at: string;
   completed_at: string | null;
+  channel_name: string | null;
+  channel_logo: string | null;
 }
 
 export interface DashboardStats {
@@ -161,6 +163,34 @@ export interface SeasonDetail {
 export interface SeriesDetail {
   info: SeriesInfo;
   seasons: SeasonDetail[];
+}
+
+export interface VodInfo {
+  name: string | null;
+  cover: string | null;
+  plot: string | null;
+  cast: string | null;
+  director: string | null;
+  genre: string | null;
+  release_date: string | null;
+  rating: unknown;
+  backdrop_path: unknown;
+  duration: string | null;
+  duration_secs: number | null;
+  youtube_trailer: string | null;
+}
+
+export interface VodDetail {
+  info: VodInfo;
+}
+
+export function getVodInfo(
+  server: string,
+  username: string,
+  password: string,
+  vodId: number
+): Promise<VodDetail> {
+  return invoke<VodDetail>('get_vod_info', { server, username, password, vodId });
 }
 
 export function getSeriesInfo(
@@ -327,6 +357,103 @@ export function cancelDownload(id: number): Promise<void> {
 
 export function clearCompletedDownloads(): Promise<void> {
   return invoke<void>('clear_completed_downloads');
+}
+
+export function openDownloadFile(filePath: string): Promise<void> {
+  return invoke<void>('open_download_file', { filePath });
+}
+
+export function showInFolder(filePath: string): Promise<void> {
+  return invoke<void>('show_in_folder', { filePath });
+}
+
+export function getDefaultDownloadDir(): Promise<string> {
+  return invoke<string>('get_default_download_dir');
+}
+
+// ─── Social Download Commands ───────────────────────────────────────────────
+
+export interface SocialFormat {
+  format_id: string;
+  ext: string;
+  resolution: string | null;
+  filesize: number | null;
+  vcodec: string | null;
+  acodec: string | null;
+  label: string;
+}
+
+export interface SocialVideoInfo {
+  id: string;
+  title: string;
+  thumbnail: string | null;
+  duration: number | null;
+  uploader: string | null;
+  view_count: number | null;
+  formats: SocialFormat[];
+  url: string;
+  platform: string;
+}
+
+export interface SocialDownloadProgress {
+  download_id: string;
+  progress: number;
+  downloaded_bytes: number;
+  total_bytes: number | null;
+  speed: string | null;
+  eta: string | null;
+  status: string;
+  filename: string | null;
+}
+
+export function checkYtdlp(): Promise<string> {
+  return invoke<string>('check_ytdlp');
+}
+
+export function getSocialVideoInfo(url: string): Promise<SocialVideoInfo> {
+  return invoke<SocialVideoInfo>('get_social_video_info', { url });
+}
+
+export function startSocialDownload(
+  url: string,
+  formatId: string,
+  outputDir: string,
+  downloadId: string,
+  title: string,
+  thumbnail: string | null,
+  platform: string,
+  formatLabel: string | null,
+): Promise<void> {
+  return invoke<void>('start_social_download', { url, formatId, outputDir, downloadId, title, thumbnail, platform, formatLabel });
+}
+
+export function cancelSocialDownload(downloadId: string): Promise<void> {
+  return invoke<void>('cancel_social_download', { downloadId });
+}
+
+export interface SocialDownloadRecord {
+  id: string;
+  url: string;
+  title: string;
+  thumbnail: string | null;
+  platform: string;
+  format_label: string | null;
+  output_dir: string | null;
+  file_path: string | null;
+  status: string;
+  progress: number;
+  downloaded_bytes: number;
+  total_bytes: number | null;
+  created_at: string;
+  completed_at: string | null;
+}
+
+export function getSocialDownloads(): Promise<SocialDownloadRecord[]> {
+  return invoke<SocialDownloadRecord[]>('get_social_downloads');
+}
+
+export function clearSocialDownloads(): Promise<void> {
+  return invoke<void>('clear_social_downloads');
 }
 
 // ─── Recommendation Commands ─────────────────────────────────────────────────

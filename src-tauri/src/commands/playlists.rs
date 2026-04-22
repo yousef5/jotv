@@ -1,7 +1,7 @@
 use crate::db::models::{ChannelGroup, Playlist};
 use crate::db::Database;
 use crate::parsers::m3u;
-use crate::parsers::xtream::{self, SeriesDetail, XtreamAccountInfo, XtreamCredentials};
+use crate::parsers::xtream::{self, SeriesDetail, VodDetail, XtreamAccountInfo, XtreamCredentials};
 use rusqlite::params;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
@@ -316,6 +316,17 @@ pub async fn get_series_info(
 ) -> Result<SeriesDetail, String> {
     let creds = XtreamCredentials { server, username, password };
     xtream::fetch_series_info(&creds, series_id).await
+}
+
+#[tauri::command]
+pub async fn get_vod_info(
+    server: String,
+    username: String,
+    password: String,
+    vod_id: i64,
+) -> Result<VodDetail, String> {
+    let creds = XtreamCredentials { server, username, password };
+    xtream::fetch_vod_info(&creds, vod_id).await
 }
 
 #[tauri::command]

@@ -4,6 +4,7 @@ pub mod parsers;
 
 use commands::downloads::DownloadManager;
 use commands::mpv_player::MpvState;
+use commands::social::SocialDownloadManager;
 use db::Database;
 use tauri::Manager;
 
@@ -33,6 +34,7 @@ pub fn run() {
             app.manage(database);
             app.manage(MpvState::new());
             app.manage(DownloadManager::new());
+            app.manage(SocialDownloadManager::new());
 
             Ok(())
         })
@@ -44,6 +46,7 @@ pub fn run() {
             commands::playlists::add_playlist_from_xtream,
             commands::playlists::get_xtream_account_info,
             commands::playlists::get_series_info,
+            commands::playlists::get_vod_info,
             commands::playlists::refresh_playlist,
             commands::playlists::delete_playlist,
             commands::playlists::get_playlist_groups,
@@ -100,6 +103,16 @@ pub fn run() {
             commands::downloads::resume_download,
             commands::downloads::cancel_download,
             commands::downloads::clear_completed_downloads,
+            commands::downloads::open_download_file,
+            commands::downloads::show_in_folder,
+            commands::downloads::get_default_download_dir,
+            // Social Downloads
+            commands::social::check_ytdlp,
+            commands::social::get_social_video_info,
+            commands::social::start_social_download,
+            commands::social::cancel_social_download,
+            commands::social::get_social_downloads,
+            commands::social::clear_social_downloads,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

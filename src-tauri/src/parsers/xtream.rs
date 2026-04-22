@@ -112,6 +112,64 @@ pub struct XtreamSeriesInfo {
     pub backdrop_path: Option<serde_json::Value>,
 }
 
+/// VOD movie info from Xtream get_vod_info API.
+/// Parsed manually because the API often returns duplicate JSON keys (e.g. "plot" twice).
+#[derive(Debug, Clone, Serialize)]
+pub struct XtreamVodInfo {
+    pub name: Option<String>,
+    pub cover: Option<String>,
+    pub plot: Option<String>,
+    pub cast: Option<String>,
+    pub director: Option<String>,
+    pub genre: Option<String>,
+    pub release_date: Option<String>,
+    pub rating: Option<serde_json::Value>,
+    pub backdrop_path: Option<serde_json::Value>,
+    pub duration: Option<String>,
+    pub duration_secs: Option<i64>,
+    pub youtube_trailer: Option<String>,
+}
+
+/// Helper to extract an optional string from a JSON object, trying multiple keys.
+fn json_str(obj: &serde_json::Map<String, serde_json::Value>, keys: &[&str]) -> Option<String> {
+    for key in keys {
+        if let Some(serde_json::Value::String(s)) = obj.get(*key) {
+            if !s.is_empty() {
+                return Some(s.clone());
+            }
+        }
+    }
+    None
+}
+
+impl XtreamVodInfo {
+    fn from_value(val: &serde_json::Value) -> Self {
+        let obj = val.as_object();
+        let empty = serde_json::Map::new();
+        let m = obj.unwrap_or(&empty);
+        XtreamVodInfo {
+            name: json_str(m, &["name"]),
+            cover: json_str(m, &["cover_big", "movie_image", "stream_icon", "cover"]),
+            plot: json_str(m, &["plot", "description"]),
+            cast: json_str(m, &["cast"]),
+            director: json_str(m, &["director"]),
+            genre: json_str(m, &["genre"]),
+            release_date: json_str(m, &["releasedate", "releaseDate", "release_date"]),
+            rating: m.get("rating").cloned(),
+            backdrop_path: m.get("backdrop_path").cloned(),
+            duration: json_str(m, &["duration"]),
+            duration_secs: m.get("duration_secs").and_then(|v| v.as_i64()),
+            youtube_trailer: json_str(m, &["youtube_trailer"]),
+        }
+    }
+}
+
+/// Full VOD detail with info
+#[derive(Debug, Clone, Serialize)]
+pub struct VodDetail {
+    pub info: XtreamVodInfo,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct XtreamEpisode {
     #[serde(default, deserialize_with = "deserialize_id")]
@@ -355,6 +413,51 @@ pub async fn fetch_series_info(
     }
 
     Ok(SeriesDetail { info, seasons })
+}
+
+/// Fetch VOD info from Xtream API.
+pub async fn fetch_vod_info(
+    creds: &XtreamCredentials,
+    vod_id: i64,
+) -> Result<VodDetail, String> {
+    let client = xtream_client(30)?;
+
+    let url = format!("{}&action=get_vod_info&vod_id={}", creds.base_url(), vod_id);
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to fetch VOD info: {}", e))?;
+
+    let status = resp.status();
+    let body = resp.bytes().await
+        .map_err(|e| format!("Failed to read response body: {}", e))?;
+
+    if !status.is_success() {
+        let preview = String::from_utf8_lossy(&body[..body.len().min(200)]);
+        return Err(format!("Server returned HTTP {}: {}", status.as_u16(), preview));
+    }
+
+    if body.is_empty() {
+        return Err("Server returned empty response".to_string());
+    }
+
+    // Parse as raw Value to handle duplicate keys (common in Xtream APIs).
+    // serde_json::Value silently takes the last value for duplicate keys.
+    let raw: serde_json::Value = serde_json::from_slice(&body)
+        .map_err(|e| {
+            let preview = String::from_utf8_lossy(&body[..body.len().min(300)]);
+            format!("JSON parse error: {} — Response: {}", e, preview)
+        })?;
+
+    let info = if let Some(info_val) = raw.get("info") {
+        XtreamVodInfo::from_value(info_val)
+    } else {
+        // Some APIs put info fields at root level
+        XtreamVodInfo::from_value(&raw)
+    };
+
+    Ok(VodDetail { info })
 }
 
 /// Progress callback for reporting import status.
