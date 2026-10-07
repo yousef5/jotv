@@ -41,6 +41,10 @@ export interface FavoriteChannel {
   playlist_name: string;
   category: string;
   added_at: string;
+  playlist_id: number;
+  content_type: 'live' | 'vod' | 'series';
+  /** Your category (FavoriteList id); null = not sorted yet */
+  list_id: number | null;
 }
 
 export interface EpgEntry {
@@ -153,6 +157,9 @@ export interface EpisodeDetail {
   title: string;
   stream_url: string;
   container_extension: string;
+  image: string | null;
+  plot: string | null;
+  duration_secs: number | null;
 }
 
 export interface SeasonDetail {
@@ -232,12 +239,64 @@ export function getChannels(playlistId: number): Promise<Channel[]> {
   return invoke<Channel[]>('get_channels', { playlistId });
 }
 
+/** A movie/series with list metadata (rating, year, genre) */
+export interface MediaChannel extends Channel {
+  rating: number | null;
+  year: number | null;
+  genre: string | null;
+}
+
+export type MediaSort = 'added' | 'rating' | 'year' | 'name';
+
+export interface MediaQuery {
+  group?: string | null;
+  sort?: MediaSort;
+  year?: number | null;
+  genre?: string | null;
+  minRating?: number | null;
+}
+
+export function browseMedia(
+  playlistId: number,
+  contentType: string,
+  q: MediaQuery,
+  limit: number,
+  offset = 0,
+): Promise<MediaChannel[]> {
+  return invoke<MediaChannel[]>('browse_media', {
+    playlistId,
+    contentType,
+    group: q.group ?? null,
+    sort: q.sort ?? 'added',
+    year: q.year ?? null,
+    genre: q.genre ?? null,
+    minRating: q.minRating ?? null,
+    limit,
+    offset,
+  });
+}
+
+export interface MediaFacets {
+  years: { value: number; count: number }[];
+  genres: { value: string; count: number }[];
+  /** How many titles have a rating at all */
+  rated: number;
+}
+
+export function getMediaFacets(playlistId: number, contentType: string, group: string | null): Promise<MediaFacets> {
+  return invoke<MediaFacets>('get_media_facets', { playlistId, contentType, group });
+}
+
+export function getChannel(id: number): Promise<Channel> {
+  return invoke<Channel>('get_channel', { id });
+}
+
 export function getChannelsByType(playlistId: number, contentType: string): Promise<Channel[]> {
   return invoke<Channel[]>('get_channels_by_type', { playlistId, contentType });
 }
 
-export function getRecentlyAdded(playlistId: number, contentType: string, limit: number = 60): Promise<Channel[]> {
-  return invoke<Channel[]>('get_recently_added', { playlistId, contentType, limit });
+export function getRecentlyAdded(playlistId: number, contentType: string, limit: number = 60, offset: number = 0): Promise<Channel[]> {
+  return invoke<Channel[]>('get_recently_added', { playlistId, contentType, limit, offset });
 }
 
 export function getGroupsByType(playlistId: number, contentType: string): Promise<ChannelGroup[]> {
@@ -295,6 +354,30 @@ export function removeFavorite(channelId: number): Promise<void> {
 
 export function toggleFavorite(channelId: number): Promise<boolean> {
   return invoke<boolean>('toggle_favorite', { channelId });
+}
+
+export interface FavoriteList {
+  id: number;
+  name: string;
+  kind: 'live' | 'vod' | 'series';
+  color: string | null;
+  sort: number;
+}
+
+export function favoriteLists(): Promise<FavoriteList[]> {
+  return invoke<FavoriteList[]>('favorite_lists');
+}
+
+export function favoriteListSave(id: number | null, name: string, kind: FavoriteList['kind'], color: string | null = null): Promise<FavoriteList> {
+  return invoke<FavoriteList>('favorite_list_save', { id, name, kind, color });
+}
+
+export function favoriteListDelete(id: number): Promise<void> {
+  return invoke<void>('favorite_list_delete', { id });
+}
+
+export function favoriteSetList(channelIds: number[], listId: number | null): Promise<void> {
+  return invoke<void>('favorite_set_list', { channelIds, listId });
 }
 
 export function isFavorite(channelId: number): Promise<boolean> {
@@ -423,8 +506,11 @@ export function startSocialDownload(
   thumbnail: string | null,
   platform: string,
   formatLabel: string | null,
+  categoryId: number | null = null,
+  /** Exact tags; `null` = use the title's #hashtags */
+  tags: string[] | null = null,
 ): Promise<void> {
-  return invoke<void>('start_social_download', { url, formatId, outputDir, downloadId, title, thumbnail, platform, formatLabel });
+  return invoke<void>('start_social_download', { url, formatId, outputDir, downloadId, title, thumbnail, platform, formatLabel, categoryId, tags });
 }
 
 export function cancelSocialDownload(downloadId: string): Promise<void> {
@@ -456,6 +542,88 @@ export function clearSocialDownloads(): Promise<void> {
   return invoke<void>('clear_social_downloads');
 }
 
+// ─── Video Library (reels) ───────────────────────────────────────────────────
+
+export interface Reel {
+  id: string;
+  /** Display name (the user's name, else the original title) */
+  title: string;
+  original_title: string;
+  url: string;
+  platform: string;
+  file_path: string;
+  thumbnail: string | null;
+  thumb_path: string | null;
+  category_id: number | null;
+  tags: string[];
+  favorite: boolean;
+  duration: number | null;
+  width: number | null;
+  height: number | null;
+  file_size: number | null;
+  plays: number;
+  last_played_at: string | null;
+  created_at: string;
+  kind: 'video' | 'image';
+}
+
+export interface ReelCategory {
+  id: number;
+  name: string;
+  parent_id: number | null;
+  color: string | null;
+  sort: number;
+}
+
+export function reelsList(): Promise<Reel[]> {
+  return invoke<Reel[]>('reels_list');
+}
+
+export function reelUpdate(id: string, name: string | null, categoryId: number | null, tags: string[], favorite: boolean): Promise<Reel> {
+  return invoke<Reel>('reel_update', { id, name, categoryId, tags, favorite });
+}
+
+export function reelsMove(ids: string[], categoryId: number | null): Promise<void> {
+  return invoke<void>('reels_move', { ids, categoryId });
+}
+
+export function reelsTag(ids: string[], tags: string[]): Promise<void> {
+  return invoke<void>('reels_tag', { ids, tags });
+}
+
+export function reelsDelete(ids: string[], deleteFiles: boolean): Promise<void> {
+  return invoke<void>('reels_delete', { ids, deleteFiles });
+}
+
+export function reelsImport(paths: string[], categoryId: number | null): Promise<number> {
+  return invoke<number>('reels_import', { paths, categoryId });
+}
+
+export function reelProbe(id: string): Promise<Reel> {
+  return invoke<Reel>('reel_probe', { id });
+}
+
+/** Use an image as a video's cover; `null` goes back to a frame from the video. */
+export function reelSetCover(id: string, image: string | null): Promise<Reel> {
+  return invoke<Reel>('reel_set_cover', { id, image });
+}
+
+export function reelPlayed(id: string): Promise<void> {
+  return invoke<void>('reel_played', { id });
+}
+
+export function reelCategories(): Promise<ReelCategory[]> {
+  return invoke<ReelCategory[]>('reel_categories');
+}
+
+export function reelCategorySave(id: number | null, name: string, parentId: number | null, color: string | null): Promise<ReelCategory> {
+  return invoke<ReelCategory>('reel_category_save', { id, name, parentId, color });
+}
+
+export function reelCategoryDelete(id: number): Promise<void> {
+  return invoke<void>('reel_category_delete', { id });
+}
+
 // ─── Recommendation Commands ─────────────────────────────────────────────────
 
 export function getRecommendations(limit?: number): Promise<Channel[]> {
@@ -466,12 +634,75 @@ export function getRecommendations(limit?: number): Promise<Channel[]> {
 
 // ─── MPV Player Commands ────────────────────────────────────────────────────
 
-export function mpvPlay(url: string, title: string): Promise<void> {
-  return invoke<void>('mpv_play', { url, title });
+export interface MpvOptions {
+  /** Native window to render into (in-app playback) */
+  wid?: number;
+  volume?: number;
+  muted?: boolean;
+  /** false for movies/episodes: no LIVE badge, seekable, MPV seek bar in fullscreen */
+  live?: boolean;
+  /** Start position in seconds (resume) */
+  start?: number;
+  /** Preferred audio language(s), e.g. "ara" */
+  alang?: string;
+  /** Preferred subtitle language(s), or "no" for subtitles off */
+  slang?: string;
 }
 
-export function mpvLoad(url: string, title: string): Promise<void> {
-  return invoke<void>('mpv_load', { url, title });
+function mpvArgs(url: string, title: string, o: MpvOptions) {
+  return {
+    url,
+    title,
+    wid: o.wid ?? null,
+    volume: o.volume ?? null,
+    muted: o.muted ?? null,
+    live: o.live ?? null,
+    start: o.start ?? null,
+    alang: o.alang ?? null,
+    slang: o.slang ?? null,
+  };
+}
+
+export function mpvPlay(url: string, title: string, opts: MpvOptions = {}): Promise<void> {
+  return invoke<void>('mpv_play', mpvArgs(url, title, opts));
+}
+
+export function mpvLoad(url: string, title: string, opts: MpvOptions = {}): Promise<void> {
+  return invoke<void>('mpv_load', mpvArgs(url, title, opts));
+}
+
+/** Seek by `seconds`, or to `seconds` when `absolute`. */
+export function mpvSeek(seconds: number, absolute = false): Promise<void> {
+  return invoke<void>('mpv_seek', { seconds, absolute });
+}
+
+export interface MpvTrack {
+  id: number;
+  kind: 'audio' | 'sub';
+  lang: string | null;
+  title: string | null;
+  codec: string | null;
+  channels: number | null;
+  selected: boolean;
+  external: boolean;
+}
+
+export function mpvTracks(): Promise<MpvTrack[]> {
+  return invoke<MpvTrack[]>('mpv_tracks');
+}
+
+/** `id` null = subtitles off. `lang` becomes the preference for the next file. */
+export function mpvSetTrack(kind: 'audio' | 'sub', id: number | null, lang: string | null): Promise<void> {
+  return invoke<void>('mpv_set_track', { kind, id, lang });
+}
+
+/** Shows or hides MPV's own seek bar (in-app fullscreen). */
+export function mpvOsc(visible: boolean): Promise<void> {
+  return invoke<void>('mpv_osc', { visible });
+}
+
+export function mpvToggleMute(): Promise<void> {
+  return invoke<void>('mpv_toggle_mute');
 }
 
 export function mpvPause(): Promise<void> {
@@ -492,6 +723,72 @@ export function mpvVolume(volume: number): Promise<void> {
 
 export function mpvIsRunning(): Promise<boolean> {
   return invoke<boolean>('mpv_is_running');
+}
+
+export type MpvPlaybackState = 'live' | 'buffering' | 'nosignal' | 'paused' | 'offline';
+
+export interface MpvStatus {
+  state: MpvPlaybackState;
+  cache_seconds: number;
+  /** Seconds downloaded but not yet shown: how far playback trails the live edge */
+  behind_seconds: number;
+  volume: number;
+  muted: boolean;
+  time_pos: number;
+  /** 0 for live streams */
+  duration: number;
+  eof: boolean;
+}
+
+export interface ProbeResult {
+  ok: boolean;
+  status: number | null;
+  message: string;
+}
+
+// ─── In-app video surface (MPV --wid) ──────────────────────────────────────
+
+/** Native window id MPV can render into; rejects where embedding isn't supported. */
+export function embedAttach(): Promise<number> {
+  return invoke<number>('embed_attach');
+}
+
+/** Positions the video surface, in CSS pixels relative to the webview. */
+export function embedPlace(x: number, y: number, width: number, height: number, visible: boolean): Promise<void> {
+  return invoke<void>('embed_place', { x, y, width, height, visible });
+}
+
+export function embedDetach(): Promise<void> {
+  return invoke<void>('embed_detach');
+}
+
+// Live connection status of the channel currently playing in MPV.
+export function mpvStatus(): Promise<MpvStatus> {
+  return invoke<MpvStatus>('mpv_status');
+}
+
+/** Fresh connection to `url` exactly as given (stream recovery). */
+export function mpvReconnect(url: string): Promise<void> {
+  return invoke<void>('mpv_reconnect', { url });
+}
+
+/** "stable" = bigger buffer before resuming after a stall; "fast" = resume quickly. */
+export function mpvSetBuffer(mode: 'stable' | 'fast'): Promise<void> {
+  return invoke<void>('mpv_set_buffer', { mode });
+}
+
+export function mpvBadgeReconnecting(on: boolean): Promise<void> {
+  return invoke<void>('mpv_badge_reconnecting', { on });
+}
+
+/** Jumps to the live edge of what MPV has already downloaded. */
+export function mpvGoLive(): Promise<void> {
+  return invoke<void>('mpv_go_live');
+}
+
+// Test whether a stream URL is reachable and serving data (does not touch MPV).
+export function probeStream(url: string): Promise<ProbeResult> {
+  return invoke<ProbeResult>('probe_stream', { url });
 }
 
 // ─── External Player Commands ───────────────────────────────────────────────
@@ -516,4 +813,54 @@ export function setSetting(key: string, value: string): Promise<void> {
 
 export function getAllSettings(): Promise<[string, string][]> {
   return invoke<[string, string][]>('get_all_settings');
+}
+
+// ─── TMDB artwork (optional, needs the user's key) ──────────────────────────
+
+export interface TmdbPerson {
+  name: string;
+  character: string | null;
+  photo: string | null;
+}
+
+export interface TmdbDetails {
+  tmdb_id: number;
+  backdrop: string | null;
+  /** Transparent title treatment */
+  logo: string | null;
+  poster: string | null;
+  overview: string | null;
+  rating: number | null;
+  /** YouTube key */
+  trailer: string | null;
+  cast: TmdbPerson[];
+}
+
+/** Null when no TMDB key is set or nothing matched. */
+export function tmdbDetails(kind: 'vod' | 'series', title: string, year: number | null): Promise<TmdbDetails | null> {
+  return invoke<TmdbDetails | null>('tmdb_details', { kind, title, year });
+}
+
+export function tmdbCheckKey(key: string): Promise<boolean> {
+  return invoke<boolean>('tmdb_check_key', { key });
+}
+
+// ─── Global search (all playlists, in-memory index) ─────────────────────────
+
+export interface GlobalSearchResult {
+  live: MediaChannel[];
+  vod: MediaChannel[];
+  series: MediaChannel[];
+  /** All matches per type; the lists hold the best few */
+  counts: { live: number; vod: number; series: number };
+  elapsed_ms: number;
+}
+
+export function globalSearch(query: string, perType = 12): Promise<GlobalSearchResult> {
+  return invoke<GlobalSearchResult>('global_search', { query, perType });
+}
+
+/** Builds the search index ahead of the first query. */
+export function searchWarmup(): Promise<void> {
+  return invoke<void>('search_warmup');
 }

@@ -72,6 +72,8 @@ pub struct XtreamVodItem {
     pub container_extension: Option<String>,
     #[serde(default)]
     pub added: Option<serde_json::Value>,
+    #[serde(default)]
+    pub rating: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -88,6 +90,12 @@ pub struct XtreamSeriesItem {
     pub cover: Option<String>,
     #[serde(default)]
     pub last_modified: Option<serde_json::Value>,
+    #[serde(default)]
+    pub rating: Option<serde_json::Value>,
+    #[serde(default)]
+    pub genre: Option<String>,
+    #[serde(default, rename = "releaseDate")]
+    pub release_date: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -184,6 +192,9 @@ pub struct XtreamEpisode {
     pub season: serde_json::Value,
     #[serde(default)]
     pub direct_source: Option<String>,
+    /// Object with movie_image / plot / duration_secs, or `[]` on some servers
+    #[serde(default)]
+    pub info: serde_json::Value,
 }
 
 /// Xtream APIs return IDs as either strings or numbers — handle both.
@@ -227,6 +238,9 @@ pub struct EpisodeDetail {
     pub title: String,
     pub stream_url: String,
     pub container_extension: String,
+    pub image: Option<String>,
+    pub plot: Option<String>,
+    pub duration_secs: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -239,6 +253,37 @@ pub struct XtreamChannel {
     pub group: String,
     pub content_type: String,
     pub added_on_server: i64,
+    pub rating: Option<f64>,
+    pub year: Option<i64>,
+    pub genre: Option<String>,
+}
+
+/// Rating as sent by Xtream: "6.2", 6.2, "" or null. 0 means "not rated".
+fn parse_rating(val: &Option<serde_json::Value>) -> Option<f64> {
+    let n = match val.as_ref()? {
+        serde_json::Value::Number(n) => n.as_f64()?,
+        serde_json::Value::String(s) => s.trim().parse::<f64>().ok()?,
+        _ => return None,
+    };
+    (n > 0.0 && n <= 10.0).then(|| (n * 10.0).round() / 10.0)
+}
+
+/// Year from a release date ("2024-05-01") or a title like "Name (2024)".
+fn parse_year(release_date: Option<&str>, name: &str) -> Option<i64> {
+    let from_date = release_date
+        .and_then(|d| d.trim().get(0..4))
+        .and_then(|y| y.parse::<i64>().ok());
+    let from_name = || {
+        let bytes = name.as_bytes();
+        (0..bytes.len().saturating_sub(3)).rev().find_map(|i| {
+            let y: i64 = name.get(i..i + 4)?.parse().ok()?;
+            let before = i.checked_sub(1).map(|j| bytes[j]);
+            let after = bytes.get(i + 4).copied();
+            let boundary = |b: Option<u8>| b.map_or(true, |c| !c.is_ascii_digit());
+            ((1900..=2100).contains(&y) && boundary(before) && boundary(after)).then_some(y)
+        })
+    };
+    from_date.filter(|y| (1900..=2100).contains(y)).or_else(from_name)
 }
 
 /// Parse a timestamp that can be a string or number from Xtream API
@@ -391,12 +436,24 @@ pub async fn fetch_series_info(
                                 serde_json::Value::String(s) => s.clone(),
                                 _ => "0".to_string(),
                             };
+                            let info = ep.info.as_object();
+                            let text = |key: &str| {
+                                info.and_then(|m| m.get(key))
+                                    .and_then(|v| v.as_str())
+                                    .map(|s| s.trim().to_string())
+                                    .filter(|s| !s.is_empty())
+                            };
                             EpisodeDetail {
                                 id: ep.id,
                                 episode_num: ep_num,
                                 title: ep.title.clone(),
                                 stream_url: creds.series_episode_url(ep.id, ext),
                                 container_extension: ext.to_string(),
+                                image: text("movie_image").filter(|s| s.starts_with("http")),
+                                plot: text("plot"),
+                                duration_secs: info
+                                    .and_then(|m| m.get("duration_secs"))
+                                    .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok()))),
                             }
                         }).collect();
 
@@ -582,6 +639,7 @@ pub async fn fetch_xtream_channels(
             logo_url: s.stream_icon, epg_id: s.epg_channel_id,
             group, content_type: "live".to_string(),
             added_on_server: 0,
+            rating: None, year: None, genre: None,
         }
     }));
 
@@ -591,7 +649,11 @@ pub async fn fetch_xtream_channels(
         let added = parse_timestamp(&v.added);
         let group = v.category_id.as_ref()
             .and_then(|cid| vod_cat_map.get(cid)).cloned().unwrap_or_default();
+        let year = parse_year(None, &v.name);
         XtreamChannel {
+            rating: parse_rating(&v.rating),
+            year,
+            genre: None,
             name: v.name, stream_id: v.stream_id,
             stream_url: creds.movie_url(v.stream_id, ext),
             logo_url: v.stream_icon, epg_id: None,
@@ -606,7 +668,12 @@ pub async fn fetch_xtream_channels(
         let group = s.category_id.as_ref()
             .and_then(|cid| series_cat_map.get(cid)).cloned().unwrap_or_default();
         let logo = s.cover.or(s.stream_icon);
+        let year = parse_year(s.release_date.as_deref(), &s.name);
+        let genre = s.genre.as_deref().map(str::trim).filter(|g| !g.is_empty()).map(String::from);
         XtreamChannel {
+            rating: parse_rating(&s.rating),
+            year,
+            genre,
             name: s.name, stream_id: s.series_id,
             stream_url: creds.series_url(s.series_id),
             logo_url: logo, epg_id: None,
@@ -630,6 +697,25 @@ mod tests {
             username: "user1".to_string(),
             password: "pass1".to_string(),
         }
+    }
+
+    #[test]
+    fn test_parse_rating() {
+        assert_eq!(parse_rating(&Some(serde_json::json!("6.2"))), Some(6.2));
+        assert_eq!(parse_rating(&Some(serde_json::json!(8))), Some(8.0));
+        assert_eq!(parse_rating(&Some(serde_json::json!(""))), None);
+        assert_eq!(parse_rating(&Some(serde_json::json!("0"))), None);
+        assert_eq!(parse_rating(&None), None);
+    }
+
+    #[test]
+    fn test_parse_year() {
+        assert_eq!(parse_year(None, "Fall 2: Deadpoint (2026)"), Some(2026));
+        assert_eq!(parse_year(None, "Stranglehold ( 2026 )"), Some(2026));
+        assert_eq!(parse_year(Some("2019-03-01"), "Name"), Some(2019));
+        assert_eq!(parse_year(Some(""), "1917 (2019) 4K"), Some(2019));
+        assert_eq!(parse_year(None, "Room 12345"), None);
+        assert_eq!(parse_year(None, "No year"), None);
     }
 
     #[test]

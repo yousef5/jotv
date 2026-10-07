@@ -3,21 +3,26 @@
 @tailwind utilities;
 
 :root {
-  --color-base: #1a1a2e;
-  --color-sidebar: #16213e;
-  --color-card: #0f3460;
-  --color-accent: #e94560;
-  --color-accent-green: #4ecca3;
-  --color-accent-yellow: #f0a500;
-  --color-accent-purple: #7b68ee;
-  --color-text: #e0e0e0;
-  --color-text-muted: #888888;
-  --color-surface: #1e2a4a;
-  --color-border: #2a3a5c;
-  --color-hover: #253050;
-  --radius-card: 12px;
-  --radius-btn: 8px;
-  --transition-fast: 0.2s ease;
+  /* Cinematic near-black, warm-tinted toward the brand red */
+  --color-base: oklch(0.165 0.004 25);
+  --color-sidebar: oklch(0.13 0.004 25);
+  --color-card: oklch(0.225 0.005 25);
+  --color-surface: oklch(0.2 0.005 25);
+  --color-border: oklch(0.3 0.006 25);
+  --color-hover: oklch(0.27 0.006 25);
+  --color-accent: oklch(0.58 0.225 27);
+  --color-accent-hover: oklch(0.52 0.21 27);
+  --color-accent-soft: oklch(0.7 0.16 27);
+  --color-on-accent: oklch(0.98 0.004 25);
+  --color-accent-green: oklch(0.76 0.13 165);
+  --color-accent-yellow: oklch(0.78 0.15 75);
+  --color-accent-purple: oklch(0.66 0.15 285);
+  --color-text: oklch(0.96 0.003 25);
+  --color-text-muted: oklch(0.7 0.006 25);
+  --radius-card: 8px;
+  --radius-btn: 6px;
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --transition-fast: 0.2s var(--ease-out);
 }
 
 * {
@@ -29,8 +34,9 @@
 html, body {
   height: 100%;
   overflow: hidden;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen,
-    Ubuntu, Cantarell, 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
+  /* Bundled: Inter for Latin, IBM Plex Sans Arabic (arabic subset only) for Arabic */
+  font-family: 'Inter Variable', 'IBM Plex Sans Arabic', 'Inter', -apple-system, BlinkMacSystemFont,
+    'Segoe UI', Roboto, sans-serif;
   background: var(--color-base);
   color: var(--color-text);
   -webkit-font-smoothing: antialiased;
@@ -58,14 +64,14 @@ html, body {
 
 /* Utility classes */
 .glass {
-  background: rgba(15, 52, 96, 0.6);
+  background: oklch(0.2 0.005 25 / 0.6);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .glass-heavy {
-  background: rgba(22, 33, 62, 0.85);
+  background: oklch(0.15 0.004 25 / 0.85);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
   border: 1px solid rgba(255, 255, 255, 0.1);
@@ -98,6 +104,21 @@ input, select, textarea {
   transition: border-color var(--transition-fast);
 }
 
+/* WebKitGTK draws native selects with the light GTK theme; draw our own */
+:root { color-scheme: dark; }
+select {
+  -webkit-appearance: none;
+  appearance: none;
+  background-color: var(--color-surface);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23b4aeac' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  background-size: 14px;
+  padding-right: 32px !important;
+  cursor: pointer;
+}
+select option { background: oklch(0.2 0.005 25); color: oklch(0.96 0.003 25); }
+
 input:focus, select:focus, textarea:focus {
   border-color: var(--color-accent);
 }
@@ -109,7 +130,7 @@ input::placeholder {
 /* Accent button */
 .btn-accent {
   background: var(--color-accent);
-  color: #fff;
+  color: var(--color-on-accent);
   padding: 8px 16px;
   border-radius: var(--radius-btn);
   font-size: 14px;
@@ -117,8 +138,7 @@ input::placeholder {
 }
 
 .btn-accent:hover:not(:disabled) {
-  background: #d63452;
-  transform: translateY(-1px);
+  background: var(--color-accent-hover);
 }
 
 /* Ghost button */

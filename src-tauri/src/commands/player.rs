@@ -13,10 +13,15 @@ pub async fn launch_external_player(
     player_path: String,
     stream_url: String,
 ) -> Result<(), String> {
-    Command::new(&player_path)
+    let mut child = Command::new(&player_path)
         .arg(&stream_url)
         .spawn()
         .map_err(|e| format!("Failed to launch player '{}': {}", player_path, e))?;
+
+    // Reap it when the user closes the player; otherwise it lingers as a zombie
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
 
     Ok(())
 }

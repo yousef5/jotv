@@ -10,6 +10,16 @@ use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Live TV renders MPV inside the app window (`--wid`), which only works on X11.
+    // On Wayland sessions, run through XWayland unless the user picked a backend.
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("GDK_BACKEND").is_none()
+        && std::env::var_os("WAYLAND_DISPLAY").is_some()
+        && std::env::var_os("DISPLAY").is_some()
+    {
+        std::env::set_var("GDK_BACKEND", "x11");
+    }
+
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
@@ -33,6 +43,7 @@ pub fn run() {
 
             app.manage(database);
             app.manage(MpvState::new());
+            app.manage(commands::search::SearchIndex::default());
             app.manage(DownloadManager::new());
             app.manage(SocialDownloadManager::new());
 
@@ -55,6 +66,9 @@ pub fn run() {
             commands::playlists::export_playlist,
             // Channels
             commands::channels::get_channels,
+            commands::channels::get_channel,
+            commands::channels::browse_media,
+            commands::channels::get_media_facets,
             commands::channels::get_channels_by_type,
             commands::channels::get_groups_by_type,
             commands::channels::get_recently_added,
@@ -70,6 +84,10 @@ pub fn run() {
             commands::favorites::remove_favorite,
             commands::favorites::toggle_favorite,
             commands::favorites::is_favorite,
+            commands::favorites::favorite_lists,
+            commands::favorites::favorite_list_save,
+            commands::favorites::favorite_list_delete,
+            commands::favorites::favorite_set_list,
             // History
             commands::history::record_viewing,
             commands::history::get_recently_watched,
@@ -95,6 +113,24 @@ pub fn run() {
             commands::mpv_player::mpv_fullscreen,
             commands::mpv_player::mpv_volume,
             commands::mpv_player::mpv_is_running,
+            commands::mpv_player::mpv_status,
+            commands::mpv_player::mpv_go_live,
+            commands::mpv_player::mpv_reconnect,
+            commands::mpv_player::mpv_set_buffer,
+            commands::mpv_player::mpv_badge_reconnecting,
+            commands::mpv_player::mpv_toggle_mute,
+            commands::mpv_player::mpv_seek,
+            commands::mpv_player::mpv_osc,
+            commands::mpv_player::mpv_tracks,
+            commands::mpv_player::mpv_set_track,
+            commands::mpv_player::probe_stream,
+            commands::search::global_search,
+            commands::search::search_warmup,
+            commands::tmdb::tmdb_details,
+            commands::tmdb::tmdb_check_key,
+            commands::embed::embed_attach,
+            commands::embed::embed_place,
+            commands::embed::embed_detach,
             // Downloads
             commands::downloads::start_download,
             commands::downloads::queue_download,
@@ -113,6 +149,18 @@ pub fn run() {
             commands::social::cancel_social_download,
             commands::social::get_social_downloads,
             commands::social::clear_social_downloads,
+            commands::reels::reels_list,
+            commands::reels::reel_update,
+            commands::reels::reels_move,
+            commands::reels::reels_tag,
+            commands::reels::reels_delete,
+            commands::reels::reels_import,
+            commands::reels::reel_probe,
+            commands::reels::reel_set_cover,
+            commands::reels::reel_played,
+            commands::reels::reel_categories,
+            commands::reels::reel_category_save,
+            commands::reels::reel_category_delete,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

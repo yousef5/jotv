@@ -338,6 +338,8 @@ pub async fn start_social_download(
     thumbnail: Option<String>,
     platform: String,
     format_label: Option<String>,
+    category_id: Option<i64>,
+    tags: Option<Vec<String>>,
     dm: tauri::State<'_, SocialDownloadManager>,
     db: State<'_, Database>,
 ) -> Result<(), String> {
@@ -347,13 +349,20 @@ pub async fn start_social_download(
     std::fs::create_dir_all(&output_dir)
         .map_err(|e| format!("Failed to create output directory: {}", e))?;
 
+    // The tags chosen in the app, or else the title's #hashtags
+    let reel_tags = serde_json::to_string(&match tags {
+        Some(t) => crate::commands::reels::clean_tags(t),
+        None => crate::commands::reels::hashtags(&title),
+    })
+    .unwrap_or_else(|_| "[]".into());
+
     // Insert DB record
     {
         let conn = db.conn.lock().unwrap();
         conn.execute(
-            "INSERT OR REPLACE INTO social_downloads (id, url, title, thumbnail, platform, format_label, output_dir, status)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'downloading')",
-            params![download_id, url, title, thumbnail, platform, format_label, output_dir],
+            "INSERT OR REPLACE INTO social_downloads (id, url, title, thumbnail, platform, format_label, output_dir, status, category_id, tags)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'downloading', ?8, ?9)",
+            params![download_id, url, title, thumbnail, platform, format_label, output_dir, category_id, reel_tags],
         ).map_err(|e| e.to_string())?;
     }
 
@@ -400,6 +409,13 @@ pub async fn start_social_download(
                     ).ok();
                 }
             }
+        }
+
+        // Thumbnail + duration for the library
+        if status == "completed" {
+            let app2 = app.clone();
+            let id2 = dl_id.clone();
+            tauri::async_runtime::spawn_blocking(move || crate::commands::reels::probe_and_store(&app2, &id2).ok());
         }
 
         let _ = app.emit(
@@ -460,6 +476,14 @@ async fn run_social_download(
         args.push("--audio-format".to_string());
         args.push("mp3".to_string());
     }
+
+    // yt-dlp downloads video and audio as separate pieces, merges them and
+    // deletes the pieces; this file gets the real final path
+    let final_path_file = std::env::temp_dir().join(format!("jotv-dl-{}.txt", download_id.replace(['/', '\\', '%'], "_")));
+    std::fs::remove_file(&final_path_file).ok();
+    args.push("--print-to-file".to_string());
+    args.push("after_move:filepath".to_string());
+    args.push(final_path_file.to_string_lossy().into_owned());
 
     args.push(url.to_string());
 
@@ -577,8 +601,21 @@ async fn run_social_download(
         .map_err(|e| format!("Failed to wait for yt-dlp: {}", e))?;
 
     if status.success() {
+        let final_path = std::fs::read_to_string(&final_path_file)
+            .ok()
+            .and_then(|s| s.lines().rev().map(str::trim).find(|l| !l.is_empty()).map(String::from))
+            .filter(|p| std::path::Path::new(p).exists());
+        std::fs::remove_file(&final_path_file).ok();
+        if let Some(fp) = final_path {
+            let db_state = app.state::<Database>();
+            let conn = db_state.conn.lock();
+            if let Ok(c) = conn {
+                c.execute("UPDATE social_downloads SET file_path = ?2 WHERE id = ?1", params![download_id, fp]).ok();
+            }
+        }
         Ok(())
     } else {
+        std::fs::remove_file(&final_path_file).ok();
         Err(format!(
             "yt-dlp exited with code {}",
             status.code().unwrap_or(-1)
@@ -758,7 +795,7 @@ pub async fn get_social_downloads(db: State<'_, Database>) -> Result<Vec<SocialD
         .prepare(
             "SELECT id, url, title, thumbnail, platform, format_label, output_dir, file_path,
                     status, progress, downloaded_bytes, total_bytes, created_at, completed_at
-             FROM social_downloads ORDER BY created_at DESC",
+             FROM social_downloads WHERE in_history = 1 ORDER BY created_at DESC",
         )
         .map_err(|e| e.to_string())?;
 
@@ -793,7 +830,10 @@ pub async fn get_social_downloads(db: State<'_, Database>) -> Result<Vec<SocialD
 #[tauri::command]
 pub async fn clear_social_downloads(db: State<'_, Database>) -> Result<(), String> {
     let conn = db.conn.lock().unwrap();
-    conn.execute("DELETE FROM social_downloads WHERE status IN ('completed', 'failed', 'cancelled')", [])
+    conn.execute("DELETE FROM social_downloads WHERE status IN ('failed', 'cancelled')", [])
+        .map_err(|e| e.to_string())?;
+    // Finished videos live on in the library; only hide them from the history
+    conn.execute("UPDATE social_downloads SET in_history = 0 WHERE status = 'completed'", [])
         .map_err(|e| e.to_string())?;
     Ok(())
 }

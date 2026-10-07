@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "JoTV",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "identifier": "com.jotv.app",
   "build": {
     "frontendDist": "../build",
@@ -22,7 +22,14 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+          "$APPLOCALDATA/reel-thumbs/**",
+          "$APPLOCALDATA/library-images/**"
+        ]
+      }
     }
   },
   "bundle": {

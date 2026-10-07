@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { askFavoriteCategory } from '$lib/components/FavoriteSaved.svelte';
   import { goto } from '$app/navigation';
   import type { Channel, EpgEntry } from '$lib/tauri';
   import { toggleFavorite, isFavorite, queueDownload } from '$lib/tauri';
@@ -46,9 +47,11 @@
     showControls();
   }
 
-  async function handleToggleFavorite() {
+  async function handleToggleFavorite(e?: MouseEvent) {
+    const anchor = e?.currentTarget as Element | undefined;
     try {
       isFav = await toggleFavorite(channel.id);
+      if (isFav) askFavoriteCategory(channel, anchor);
     } catch (e) {
       console.error('Failed to toggle favorite:', e);
     }

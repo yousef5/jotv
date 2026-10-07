@@ -1,11 +1,39 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
+  import { mpvLoad, recordViewing } from '$lib/tauri';
   import type { Channel } from '$lib/tauri';
   import { currentChannel, isPlaying, viewStartTime } from '$lib/stores/player';
+  import { get } from 'svelte/store';
 
   let { channel }: { channel: Channel } = $props();
 
-  function playChannel() {
+  async function playChannel() {
+    // Live channels → MPV (native player, zero cuts, hardware decode)
+    // VOD/series → browser player route (file-style playback)
+    if (channel.content_type === 'live') {
+      // Record duration of previously-watched channel before switching
+      const prev = get(currentChannel);
+      const prevStart = get(viewStartTime);
+      if (prev && prevStart) {
+        const duration = Math.floor((Date.now() - prevStart) / 1000);
+        if (duration > 5) {
+          recordViewing(prev.id, duration).catch(() => {});
+        }
+      }
+
+      currentChannel.set(channel);
+      isPlaying.set(true);
+      viewStartTime.set(Date.now());
+
+      try {
+        await mpvLoad(channel.stream_url, channel.name);
+      } catch (e) {
+        console.error('MPV failed, falling back to browser player:', e);
+        goto('/player');
+      }
+      return;
+    }
+
     currentChannel.set(channel);
     isPlaying.set(true);
     viewStartTime.set(Date.now());

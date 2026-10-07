@@ -1,5 +1,6 @@
 pub mod channels;
 pub mod downloads;
+pub mod embed;
 pub mod epg;
 pub mod favorites;
 pub mod history;
@@ -7,5 +8,8 @@ pub mod mpv_player;
 pub mod player;
 pub mod playlists;
 pub mod recommendations;
+pub mod reels;
+pub mod search;
 pub mod settings;
 pub mod social;
+pub mod tmdb;

@@ -4,15 +4,19 @@
     theme, externalPlayer, externalPlayerPath, downloadDir,
     loadSettings, updateSetting,
   } from '$lib/stores/settings';
-  import { detectExternalPlayers, getDefaultDownloadDir, showInFolder } from '$lib/tauri';
+  import { detectExternalPlayers, getDefaultDownloadDir, showInFolder, getSetting, setSetting, tmdbCheckKey } from '$lib/tauri';
   import type { ExternalPlayer } from '$lib/tauri';
   import { open } from '@tauri-apps/plugin-dialog';
 
   let detectedPlayers: ExternalPlayer[] = $state([]);
   let defaultDownloadDir: string = $state('');
+  let tmdbKey = $state('');
+  let tmdbStatus = $state<'' | 'checking' | 'saved' | 'invalid' | 'error' | 'removed'>('');
+  let tmdbError = $state('');
 
   onMount(async () => {
     await loadSettings();
+    tmdbKey = (await getSetting('tmdb_api_key').catch(() => null)) ?? '';
     try {
       detectedPlayers = await detectExternalPlayers();
     } catch (e) {
@@ -24,6 +28,27 @@
       console.error('Failed to get default download dir:', e);
     }
   });
+
+  async function saveTmdb() {
+    const key = tmdbKey.trim();
+    if (!key) {
+      await setSetting('tmdb_api_key', '').catch(() => {});
+      tmdbStatus = 'removed';
+      return;
+    }
+    tmdbStatus = 'checking';
+    try {
+      if (!(await tmdbCheckKey(key))) {
+        tmdbStatus = 'invalid';
+        return;
+      }
+      await setSetting('tmdb_api_key', key);
+      tmdbStatus = 'saved';
+    } catch (e) {
+      tmdbError = String(e);
+      tmdbStatus = 'error';
+    }
+  }
 
   function handleThemeChange(value: string) {
     updateSetting('theme', value);
@@ -152,6 +177,38 @@
               </button>
             {/if}
           </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Artwork -->
+    <section class="setting-section">
+      <h2 class="section-title">Artwork</h2>
+      <div class="setting-row">
+        <div class="setting-label">
+          <span class="label-text">TMDB API key</span>
+          <span class="label-desc">
+            Adds sharp backdrops, title logos, cast photos and trailers from The Movie Database.
+            Get a free key at themoviedb.org → Settings → API, then paste the API key or the read access token here.
+          </span>
+        </div>
+        <div class="setting-control tmdb-control">
+          <input
+            type="password"
+            bind:value={tmdbKey}
+            oninput={() => (tmdbStatus = '')}
+            placeholder="Paste your TMDB key"
+            autocomplete="off"
+            spellcheck="false"
+            aria-label="TMDB API key"
+          />
+          <button class="tmdb-save" onclick={saveTmdb} disabled={tmdbStatus === 'checking'}>
+            {tmdbStatus === 'checking' ? 'Checking…' : 'Save'}
+          </button>
+          {#if tmdbStatus === 'saved'}<span class="tmdb-note ok">Key works. Artwork appears on title pages.</span>
+          {:else if tmdbStatus === 'invalid'}<span class="tmdb-note bad">TMDB rejected this key.</span>
+          {:else if tmdbStatus === 'error'}<span class="tmdb-note bad">Couldn't reach TMDB: {tmdbError}</span>
+          {:else if tmdbStatus === 'removed'}<span class="tmdb-note">Key removed.</span>{/if}
         </div>
       </div>
     </section>
@@ -419,4 +476,18 @@
     color: var(--color-text-muted);
     margin-top: 4px;
   }
+
+  .tmdb-control { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; max-width: 520px; }
+  .tmdb-control input { flex: 1; min-width: 240px; height: 38px; }
+  .tmdb-save {
+    height: 38px;
+    padding: 0 18px;
+    border-radius: var(--radius-btn);
+    background: var(--color-text);
+    color: oklch(0.14 0.004 25);
+    font-weight: 700;
+  }
+  .tmdb-note { flex-basis: 100%; font-size: 0.8125rem; color: var(--color-text-muted); }
+  .tmdb-note.ok { color: var(--color-accent-green); }
+  .tmdb-note.bad { color: var(--color-accent-soft); }
 </style>

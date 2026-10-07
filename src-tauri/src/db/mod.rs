@@ -45,6 +45,16 @@ impl Database {
             )?;
         }
 
+        // v4: rating / year / genre from the Xtream lists (filters, sorting)
+        let has_rating: bool = conn.prepare("SELECT rating FROM channels LIMIT 0").is_ok();
+        if !has_rating {
+            conn.execute_batch(
+                "ALTER TABLE channels ADD COLUMN rating REAL;
+                 ALTER TABLE channels ADD COLUMN year INTEGER;
+                 ALTER TABLE channels ADD COLUMN genre TEXT;"
+            )?;
+        }
+
         // v2: index for search
         conn.execute_batch(
             "CREATE INDEX IF NOT EXISTS idx_channels_name ON channels(name COLLATE NOCASE);"
@@ -108,6 +118,57 @@ impl Database {
                 completed_at TEXT
             );
         ").ok();
+
+        // v5: social downloads double as a video library (reels)
+        let has_reel_cols: bool = conn.prepare("SELECT tags FROM social_downloads LIMIT 0").is_ok();
+        if !has_reel_cols {
+            conn.execute_batch(
+                "ALTER TABLE social_downloads ADD COLUMN name TEXT;
+                 ALTER TABLE social_downloads ADD COLUMN category_id INTEGER;
+                 ALTER TABLE social_downloads ADD COLUMN tags TEXT NOT NULL DEFAULT '[]';
+                 ALTER TABLE social_downloads ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0;
+                 ALTER TABLE social_downloads ADD COLUMN duration REAL;
+                 ALTER TABLE social_downloads ADD COLUMN width INTEGER;
+                 ALTER TABLE social_downloads ADD COLUMN height INTEGER;
+                 ALTER TABLE social_downloads ADD COLUMN file_size INTEGER;
+                 ALTER TABLE social_downloads ADD COLUMN thumb_path TEXT;
+                 ALTER TABLE social_downloads ADD COLUMN plays INTEGER NOT NULL DEFAULT 0;
+                 ALTER TABLE social_downloads ADD COLUMN last_played_at TEXT;",
+            )?;
+        }
+        // Completed downloads stay in the library after "clear history"
+        if conn.prepare("SELECT in_history FROM social_downloads LIMIT 0").is_err() {
+            conn.execute_batch("ALTER TABLE social_downloads ADD COLUMN in_history INTEGER NOT NULL DEFAULT 1;")?;
+        }
+        // Photos live in the library next to videos
+        if conn.prepare("SELECT media_type FROM social_downloads LIMIT 0").is_err() {
+            conn.execute_batch("ALTER TABLE social_downloads ADD COLUMN media_type TEXT NOT NULL DEFAULT 'video';")?;
+        }
+        // v6: your own categories for favorites, one set per type (channels / movies / series)
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS favorite_lists (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                color TEXT,
+                sort INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );",
+        )?;
+        if conn.prepare("SELECT list_id FROM favorites LIMIT 0").is_err() {
+            conn.execute_batch("ALTER TABLE favorites ADD COLUMN list_id INTEGER;")?;
+        }
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS reel_categories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                parent_id INTEGER REFERENCES reel_categories(id) ON DELETE CASCADE,
+                color TEXT,
+                sort INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_reel_categories_parent ON reel_categories(parent_id);",
+        )?;
 
         Ok(())
     }

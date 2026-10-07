@@ -26,6 +26,30 @@ pub struct Channel {
     pub created_at: String,
 }
 
+/// A movie/series with the list metadata used for sorting and filtering.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MediaChannel {
+    #[serde(flatten)]
+    pub channel: Channel,
+    pub rating: Option<f64>,
+    pub year: Option<i64>,
+    pub genre: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FacetCount<T> {
+    pub value: T,
+    pub count: i64,
+}
+
+/// Filter options for a playlist's movies or series, with counts.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MediaFacets {
+    pub years: Vec<FacetCount<i64>>,
+    pub genres: Vec<FacetCount<String>>,
+    pub rated: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Favorite {
     pub id: i64,
@@ -44,6 +68,10 @@ pub struct FavoriteChannel {
     pub playlist_name: String,
     pub category: String,
     pub added_at: String,
+    pub playlist_id: i64,
+    pub content_type: String,
+    /// Your category (favorite_lists.id), None = not sorted yet
+    pub list_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

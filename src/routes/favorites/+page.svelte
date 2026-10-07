@@ -1,578 +1,971 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
-  import Hls from 'hls.js';
-  import mpegts from 'mpegts.js';
+  import { onMount, tick } from 'svelte';
+  import { fade, fly } from 'svelte/transition';
+  import { flip } from 'svelte/animate';
+  import { goto } from '$app/navigation';
+  import {
+    removeFavorite, addFavorite, getSetting, favoriteLists, favoriteListSave, favoriteListDelete, favoriteSetList,
+  } from '$lib/tauri';
+  import type { Channel, FavoriteChannel, FavoriteList } from '$lib/tauri';
+  import Dropdown from '$lib/components/Dropdown.svelte';
+  import { CATEGORY_COLORS } from '$lib/stores/reels';
   import { favorites, loadFavorites } from '$lib/stores/favorites';
-  import { removeFavorite, recordViewing, detectExternalPlayers, launchExternalPlayer, mpvPlay, mpvLoad, mpvStop, mpvPause, mpvFullscreen, mpvIsRunning } from '$lib/tauri';
-  import type { FavoriteChannel, ExternalPlayer } from '$lib/tauri';
+  import { pendingOpen } from '$lib/stores/playlists';
+  import { nowPlaying } from '$lib/stores/live';
+  import { splitTitle } from '$lib/playback';
 
-  // Categories
-  let selectedCategory = $state<string | null>(null);
+  type Tab = 'all' | 'live' | 'vod' | 'series';
+  type Kind = Exclude<Tab, 'all'>;
+  type Sort = 'added' | 'name';
+  /** null = everything, 'none' = not in any category */
+  type ListFilter = number | 'none' | null;
 
-  let categories = $derived(() => {
-    const map = new Map<string, number>();
+  const KIND_LABEL: Record<Kind, string> = { live: 'Channels', vod: 'Movies', series: 'Series' };
+  const KIND_HINT: Record<Kind, string> = {
+    live: 'Sort your channels into categories like Sports, News or Kids.',
+    vod: 'Sort your movies into categories like Comedy, Watch this weekend or Classics.',
+    series: 'Sort your series into categories like Watching now, Drama or Up next.',
+  };
+
+  let loaded = $state(false);
+  let tab = $state<Tab>('all');
+  let sort = $state<Sort>('added');
+  let lists = $state<FavoriteList[]>([]);
+  let listFilter = $state<ListFilter>(null);
+  let query = $state('');
+  let failed = $state<Set<number>>(new Set());
+  /** Movies: watched fraction; series: "S1:E3" to continue */
+  let progress = $state<Record<number, number>>({});
+  let continueAt = $state<Record<number, string>>({});
+  let undo = $state<FavoriteChannel | null>(null);
+  let undoTimer: ReturnType<typeof setTimeout> | undefined;
+
+  const nf = new Intl.NumberFormat('en-US');
+
+  onMount(() => {
+    load();
+    return () => clearTimeout(undoTimer);
+  });
+
+  async function load() {
+    await Promise.all([loadFavorites(), favoriteLists().then((l) => (lists = l)).catch(() => {})]);
+    loaded = true;
+    // Watch progress for posters (local settings, no network)
     for (const f of $favorites) {
-      map.set(f.category, (map.get(f.category) || 0) + 1);
-    }
-    return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0]));
-  });
-
-  let filteredFavorites = $derived(() => {
-    if (!selectedCategory) return $favorites;
-    return $favorites.filter(f => f.category === selectedCategory);
-  });
-
-  // Player
-  let playingChannel = $state<FavoriteChannel | null>(null);
-  let playStartTime = $state<number | null>(null);
-  let videoEl = $state<HTMLVideoElement | undefined>();
-  let playerContainerEl = $state<HTMLDivElement | undefined>();
-  let hls: Hls | null = null;
-  let mpegtsPlayer: mpegts.Player | null = null;
-  let playerLoading = $state(false);
-  let playerPaused = $state(false);
-  let playerError = $state('');
-  let isFullscreen = $state(false);
-  let vodPlayingExternal = $state(false);
-  let externalPlayers = $state<ExternalPlayer[]>([]);
-  let retryCount = 0;
-  let retryTimer: ReturnType<typeof setTimeout> | null = null;
-  const MAX_RETRIES = 8;
-  let hlsRecoveryCount = 0;
-
-  const BROWSER_PLAYABLE = ['.mp4', '.webm', '.ogg'];
-  type StreamType = 'hls' | 'ts' | 'direct';
-
-  function detectStreamType(url: string): StreamType {
-    const lower = url.toLowerCase();
-    if (lower.endsWith('.m3u8') || lower.includes('.m3u8')) return 'hls';
-    if (lower.endsWith('.ts')) return 'ts';
-    return 'direct';
-  }
-
-  function isBrowserPlayable(url: string): boolean {
-    return BROWSER_PLAYABLE.some(ext => url.toLowerCase().endsWith(ext));
-  }
-
-  function setupStream(url: string) {
-    if (!videoEl) return;
-    destroyPlayer();
-    playerLoading = true;
-    playerError = '';
-    playerPaused = false;
-    vodPlayingExternal = false;
-    retryCount = 0;
-    hlsRecoveryCount = 0;
-
-    const type = detectStreamType(url);
-    if (type === 'ts' && mpegts.isSupported()) {
-      setupMpegts(url);
-    } else if (type === 'hls' && Hls.isSupported()) {
-      setupHls(url);
-    } else if (type === 'hls' && videoEl.canPlayType('application/vnd.apple.mpegurl')) {
-      videoEl.src = url; videoEl.play().catch(() => {});
-    } else if (type === 'direct' && isBrowserPlayable(url)) {
-      videoEl.src = url; videoEl.play().catch(() => {});
-    } else if (type === 'direct') {
-      openInExternalPlayer(url);
-    } else {
-      videoEl.src = url; videoEl.play().catch(() => {});
-    }
-  }
-
-  function setupHls(url: string) {
-    if (!videoEl) return;
-    hls = new Hls({
-      enableWorker: true, maxBufferLength: 60, maxMaxBufferLength: 120,
-      maxBufferSize: 120_000_000, maxBufferHole: 0.3, backBufferLength: 60,
-      liveSyncDurationCount: 3, liveMaxLatencyDurationCount: 10, liveDurationInfinity: true,
-      startLevel: -1, abrEwmaDefaultEstimate: 8_000_000, startFragPrefetch: true,
-      progressive: true, fragLoadingMaxRetry: 10, fragLoadingRetryDelay: 300,
-      manifestLoadingMaxRetry: 10, manifestLoadingRetryDelay: 300,
-      levelLoadingMaxRetry: 10, levelLoadingRetryDelay: 300, capLevelOnFPSDrop: true,
-    });
-    hls.loadSource(url);
-    hls.attachMedia(videoEl);
-    hls.on(Hls.Events.MANIFEST_PARSED, () => { playerLoading = false; videoEl?.play().catch(() => {}); });
-    hls.on(Hls.Events.FRAG_LOADED, () => { playerLoading = false; if (playerError) playerError = ''; retryCount = 0; });
-    hls.on(Hls.Events.ERROR, (_e, data) => {
-      if (!data.fatal) return;
-      if (data.type === Hls.ErrorTypes.NETWORK_ERROR) { hls?.startLoad(); scheduleRetry(() => { hls?.startLoad(); }); }
-      else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) { hlsRecoveryCount++; if (hlsRecoveryCount <= 2) hls?.recoverMediaError(); else { hls?.swapAudioCodec(); hls?.recoverMediaError(); hlsRecoveryCount = 0; } }
-      else scheduleRetry(() => { if (playingChannel) setupStream(playingChannel.stream_url); });
-    });
-  }
-
-  function setupMpegts(url: string) {
-    if (!videoEl) return;
-    mpegtsPlayer = mpegts.createPlayer({ type: 'mpegts', isLive: true, url }, {
-      enableWorker: true, enableStashBuffer: true, stashInitialSize: 1024 * 1024,
-      autoCleanupSourceBuffer: true, autoCleanupMaxBackwardDuration: 60,
-      fixAudioTimestampGap: true, lazyLoad: true, lazyLoadMaxDuration: 120,
-    });
-    mpegtsPlayer.attachMediaElement(videoEl);
-    mpegtsPlayer.load();
-    videoEl.play().catch(() => {});
-    mpegtsPlayer.on(mpegts.Events.ERROR, () => { scheduleRetry(() => { if (playingChannel) setupStream(playingChannel.stream_url); }); });
-    mpegtsPlayer.on(mpegts.Events.STATISTICS_INFO, () => { if (playerLoading) playerLoading = false; retryCount = 0; });
-  }
-
-  function scheduleRetry(action: () => void) {
-    if (retryTimer) clearTimeout(retryTimer);
-    retryCount++;
-    if (retryCount <= MAX_RETRIES) {
-      const delay = retryCount <= 2 ? retryCount * 250 : Math.min(1000 * Math.pow(2, retryCount - 3), 16000);
-      playerError = ''; playerLoading = true;
-      retryTimer = setTimeout(action, delay);
-    } else { playerLoading = false; playerError = 'Stream unavailable'; }
-  }
-
-  function destroyPlayer() {
-    if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
-    if (hls) { hls.destroy(); hls = null; }
-    if (mpegtsPlayer) { try { mpegtsPlayer.pause(); mpegtsPlayer.unload(); mpegtsPlayer.detachMediaElement(); mpegtsPlayer.destroy(); } catch {} mpegtsPlayer = null; }
-    if (videoEl) videoEl.removeAttribute('src');
-  }
-
-  async function openInExternalPlayer(url: string) {
-    playerLoading = false; vodPlayingExternal = true;
-    if (externalPlayers.length === 0) { playerError = 'No external player found. Install VLC or MPV.'; vodPlayingExternal = false; return; }
-    try { await launchExternalPlayer(externalPlayers[0].path, url); } catch (e) { playerError = `Failed: ${e}`; vodPlayingExternal = false; }
-  }
-
-  async function openCurrentInPlayer() {
-    if (!playingChannel || !externalPlayers[0]) return;
-    try { await launchExternalPlayer(externalPlayers[0].path, playingChannel.stream_url); vodPlayingExternal = true; } catch (e) { playerError = `Failed: ${e}`; }
-  }
-
-  let usingMpv = $state(false);
-
-  async function playFav(fav: FavoriteChannel) {
-    if (playingChannel && playStartTime) {
-      const d = Math.floor((Date.now() - playStartTime) / 1000);
-      if (d > 5) recordViewing(fav.channel_id, d).catch(() => {});
-    }
-
-    const type = detectStreamType(fav.stream_url);
-    const isLive = type === 'hls' || type === 'ts';
-
-    if (isLive) {
-      // Live → MPV
-      destroyPlayer();
-      playingChannel = fav;
-      playStartTime = Date.now();
-      playerError = ''; playerLoading = true; usingMpv = true; vodPlayingExternal = false;
-      try {
-        const running = await mpvIsRunning();
-        if (running) await mpvLoad(fav.stream_url, fav.channel_name);
-        else await mpvPlay(fav.stream_url, fav.channel_name);
-        playerLoading = false;
-      } catch (e) {
-        playerError = `MPV: ${e}`;
-        playerLoading = false;
-        usingMpv = false;
+      if (f.content_type === 'vod') {
+        getSetting(`progress_vod_${f.channel_id}`).then((raw) => {
+          const [pos, dur] = (raw ?? '').split('|').map(Number);
+          if (pos > 0 && dur > 0) progress = { ...progress, [f.channel_id]: Math.min(1, pos / dur) };
+        }).catch(() => {});
+      } else if (f.content_type === 'series') {
+        getSetting(`series_progress_${f.channel_id}`).then((raw) => {
+          const [s, e] = (raw ?? '').split(':');
+          if (s && e) continueAt = { ...continueAt, [f.channel_id]: `S${s}:E${e}` };
+        }).catch(() => {});
       }
-    } else {
-      // VOD → browser/external
-      destroyPlayer();
-      playingChannel = fav;
-      playStartTime = Date.now();
-      playerError = ''; playerLoading = true; usingMpv = false; vodPlayingExternal = false;
-      requestAnimationFrame(() => { if (videoEl) setupStream(fav.stream_url); });
     }
   }
 
-  async function stopPlaying() {
-    if (playingChannel && playStartTime) {
-      const d = Math.floor((Date.now() - playStartTime) / 1000);
-      if (d > 5) try { await recordViewing(playingChannel.channel_id, d); } catch {}
+  let counts = $derived({
+    all: $favorites.length,
+    live: $favorites.filter((f) => f.content_type === 'live').length,
+    vod: $favorites.filter((f) => f.content_type === 'vod').length,
+    series: $favorites.filter((f) => f.content_type === 'series').length,
+  });
+  let kindLists = $derived(tab === 'all' ? [] : lists.filter((l) => l.kind === tab));
+  /** A favorite's category, if it still exists and fits its type */
+  function listOf(f: FavoriteChannel): FavoriteList | undefined {
+    return f.list_id === null ? undefined : lists.find((l) => l.id === f.list_id && l.kind === f.content_type);
+  }
+  let listCounts = $derived.by(() => {
+    const m = new Map<number | 'none', number>();
+    for (const f of $favorites) {
+      if (tab !== 'all' && f.content_type !== tab) continue;
+      const k = listOf(f)?.id ?? 'none';
+      m.set(k, (m.get(k) ?? 0) + 1);
     }
-    if (usingMpv) { mpvStop().catch(() => {}); usingMpv = false; }
-    destroyPlayer();
-    playingChannel = null; playStartTime = null;
-    playerLoading = false; playerPaused = false; playerError = ''; vodPlayingExternal = false;
-    if (document.fullscreenElement) document.exitFullscreen();
+    return m;
+  });
+
+  function colorOf(l: FavoriteList): string {
+    return l.color ?? CATEGORY_COLORS[l.id % CATEGORY_COLORS.length];
   }
 
-  function togglePlay() { if (!videoEl) return; if (videoEl.paused) videoEl.play().catch(() => {}); else videoEl.pause(); }
-  function toggleFullscreen() { if (!playerContainerEl) return; if (document.fullscreenElement) document.exitFullscreen(); else playerContainerEl.requestFullscreen(); }
-  function handleFullscreenChange() { isFullscreen = !!document.fullscreenElement; }
+  // A filter for another type makes no sense: reset when switching tabs
+  $effect(() => {
+    void tab;
+    listFilter = null;
+    draft = null;
+  });
 
-  async function handleRemove(fav: FavoriteChannel) {
-    const wasPlaying = playingChannel?.channel_id === fav.channel_id;
-    if (wasPlaying) await stopPlaying();
-    try { await removeFavorite(fav.channel_id); await loadFavorites(); } catch {}
+  let shown = $derived.by(() => {
+    const term = query.trim().toLowerCase();
+    let list = $favorites.filter(
+      (f) =>
+        (tab === 'all' || f.content_type === tab) &&
+        (listFilter === null || (listFilter === 'none' ? !listOf(f) : listOf(f)?.id === listFilter)) &&
+        (!term || f.channel_name.toLowerCase().includes(term) || f.group_name.toLowerCase().includes(term)),
+    );
+    list = [...list].sort((a, b) =>
+      sort === 'name' ? a.channel_name.localeCompare(b.channel_name) : b.added_at.localeCompare(a.added_at),
+    );
+    return list;
+  });
+
+  /** Sections per type, each split into your categories (unsorted last) */
+  let sections = $derived.by(() => {
+    const kinds: Kind[] = tab === 'all' ? ['live', 'vod', 'series'] : [tab];
+    return kinds
+      .map((kind) => {
+        const items = shown.filter((f) => f.content_type === kind);
+        const own = lists.filter((l) => l.kind === kind);
+        const grouped = listFilter === null && own.length > 0;
+        const groups = grouped
+          ? [
+              ...own.map((l) => ({ list: l as FavoriteList | null, items: items.filter((f) => listOf(f)?.id === l.id) })),
+              { list: null, items: items.filter((f) => !listOf(f)) },
+            ].filter((g) => g.items.length)
+          : [{ list: null, items }];
+        // Only "Not sorted" left: no heading needed
+        return { kind, count: items.length, grouped: grouped && groups.some((g) => g.list), groups };
+      })
+      .filter((s) => s.count);
+  });
+
+  // ── Categories: create, rename, delete ──
+  let draft = $state<{ id: number | null; name: string } | null>(null);
+  let draftEl = $state<HTMLInputElement | undefined>();
+  let confirmDelete = $state<number | null>(null);
+
+  async function startDraft(id: number | null, name = '') {
+    confirmDelete = null;
+    draft = { id, name };
+    await tick();
+    draftEl?.focus();
+    draftEl?.select();
   }
 
-  function getCategoryIcon(cat: string): string {
-    const map: Record<string, string> = {
-      'News': 'M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10a2 2 0 012 2v1M19 20a2 2 0 002-2V9a2 2 0 00-2-2h-2M19 20l-7-5',
-      'Sports': 'M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10zM12 2v20M2 12h20',
-      'Movies': 'M7 2v20M17 2v20M2 12h20M2 7h5M2 17h5M17 7h5M17 17h5M2 2h20v20H2z',
-      'Kids': 'M12 2a10 10 0 1010 10A10 10 0 0012 2zM8 14s1.5 2 4 2 4-2 4-2M9 9h.01M15 9h.01',
-      'Music': 'M9 18V5l12-2v13M9 18a3 3 0 11-6 0 3 3 0 016 0zM21 16a3 3 0 11-6 0 3 3 0 016 0z',
-      'Documentary': 'M2 3h6a4 4 0 014 4v14a3 3 0 00-3-3H2zM22 3h-6a4 4 0 00-4 4v14a3 3 0 013-3h7z',
-      'Entertainment': 'M5 3l14 9-14 9V3z',
+  async function saveDraft() {
+    const d = draft;
+    if (!d || tab === 'all') return;
+    draft = null;
+    if (!d.name.trim()) return;
+    try {
+      const saved = await favoriteListSave(d.id, d.name, tab, d.id === null ? null : lists.find((l) => l.id === d.id)?.color ?? null);
+      lists = d.id === null ? [...lists.filter((l) => l.id !== saved.id), saved] : lists.map((l) => (l.id === saved.id ? saved : l));
+      if (d.id === null) listFilter = saved.id;
+    } catch (e) {
+      flash(String(e));
+    }
+  }
+
+  async function deleteList(l: FavoriteList) {
+    if (confirmDelete !== l.id) {
+      confirmDelete = l.id;
+      return;
+    }
+    confirmDelete = null;
+    await favoriteListDelete(l.id).catch(() => {});
+    lists = lists.filter((x) => x.id !== l.id);
+    favorites.update((all) => all.map((f) => (f.list_id === l.id ? { ...f, list_id: null } : f)));
+    if (listFilter === l.id) listFilter = null;
+    flash(`Deleted “${l.name}”. Its items are still saved.`);
+  }
+
+  // ── Putting a favorite into a category ──
+  let menuFor = $state<number | null>(null);
+  let menuDraft = $state('');
+
+  async function setList(f: FavoriteChannel, listId: number | null) {
+    menuFor = null;
+    const before = f.list_id;
+    favorites.update((all) => all.map((x) => (x.channel_id === f.channel_id ? { ...x, list_id: listId } : x)));
+    try {
+      await favoriteSetList([f.channel_id], listId);
+    } catch {
+      favorites.update((all) => all.map((x) => (x.channel_id === f.channel_id ? { ...x, list_id: before } : x)));
+    }
+  }
+
+  async function newListFor(f: FavoriteChannel) {
+    const name = menuDraft.trim();
+    if (!name) return;
+    menuDraft = '';
+    try {
+      const saved = await favoriteListSave(null, name, f.content_type);
+      lists = [...lists.filter((l) => l.id !== saved.id), saved];
+      await setList(f, saved.id);
+    } catch (e) {
+      flash(String(e));
+    }
+  }
+
+  function outside(e: PointerEvent) {
+    if (menuFor !== null && !(e.target as HTMLElement).closest?.('.menu, .sort-btn')) menuFor = null;
+  }
+
+  let note = $state('');
+  let noteTimer: ReturnType<typeof setTimeout> | undefined;
+  function flash(msg: string) {
+    note = msg;
+    clearTimeout(noteTimer);
+    noteTimer = setTimeout(() => (note = ''), 3500);
+  }
+
+  function asChannel(f: FavoriteChannel): Channel {
+    return {
+      id: f.channel_id,
+      playlist_id: f.playlist_id,
+      name: f.channel_name,
+      group_name: f.group_name,
+      stream_url: f.stream_url,
+      logo_url: f.logo_url,
+      epg_id: null,
+      content_type: f.content_type,
+      created_at: f.added_at,
     };
-    return map[cat] || 'M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z';
   }
 
-  onMount(async () => {
-    loadFavorites();
-    document.addEventListener('fullscreenchange', handleFullscreenChange);
-    try { externalPlayers = await detectExternalPlayers(); } catch {}
-  });
+  function open(f: FavoriteChannel) {
+    if (f.content_type === 'live') {
+      pendingOpen.set({ playlistId: f.playlist_id, contentType: 'live', channel: asChannel(f), action: 'play' });
+      goto('/live');
+    } else {
+      goto(`/title?id=${f.channel_id}`);
+    }
+  }
 
-  onDestroy(() => {
-    destroyPlayer();
-    if (usingMpv) mpvStop().catch(() => {});
-    document.removeEventListener('fullscreenchange', handleFullscreenChange);
-  });
+  async function remove(f: FavoriteChannel) {
+    favorites.update((list) => list.filter((x) => x.channel_id !== f.channel_id));
+    await removeFavorite(f.channel_id).catch(() => loadFavorites());
+    undo = f;
+    clearTimeout(undoTimer);
+    undoTimer = setTimeout(() => (undo = null), 6000);
+  }
+
+  async function restore() {
+    const f = undo;
+    if (!f) return;
+    undo = null;
+    clearTimeout(undoTimer);
+    await addFavorite(f.channel_id, f.category).catch(() => {});
+    if (f.list_id !== null) await favoriteSetList([f.channel_id], f.list_id).catch(() => {});
+    await loadFavorites();
+  }
+
+  function addedAgo(ts: string): string {
+    const t = Date.parse(ts.replace(' ', 'T') + 'Z');
+    if (isNaN(t)) return '';
+    const d = Math.floor((Date.now() - t) / 86400000);
+    return d <= 0 ? 'Added today' : d === 1 ? 'Added yesterday' : d < 30 ? `Added ${d} days ago` : `Added ${new Date(t).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
+  }
 </script>
 
-<div class="fav-page fade-in">
-  <!-- Column 1: Categories -->
-  <div class="col col-cats">
-    <div class="col-header">
-      <h2>Favorites</h2>
-      <span class="total-badge">{$favorites.length}</span>
-    </div>
-    <div class="col-scroll">
-      <button
-        class="cat-item"
-        class:active={selectedCategory === null}
-        onclick={() => selectedCategory = null}
-      >
-        <div class="cat-icon">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
-        </div>
-        <span class="cat-name">All</span>
-        <span class="cat-count">{$favorites.length}</span>
-      </button>
-      {#each categories() as [cat, count] (cat)}
-        <button
-          class="cat-item"
-          class:active={selectedCategory === cat}
-          onclick={() => selectedCategory = cat}
-        >
-          <div class="cat-icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d={getCategoryIcon(cat)}/></svg>
-          </div>
-          <span class="cat-name">{cat}</span>
-          <span class="cat-count">{count}</span>
+<svelte:window onpointerdown={outside} onkeydown={(e) => e.key === 'Escape' && (menuFor = null)} />
+
+{#snippet tile(f: FavoriteChannel)}
+  {@const playing = $nowPlaying?.kind === 'live' && $nowPlaying.channel.id === f.channel_id}
+  <button class="tile" class:playing onclick={() => open(f)} aria-label={`Watch ${f.channel_name}`}>
+    <span class="tile-art">
+      {#if f.logo_url && !failed.has(f.channel_id)}
+        <img src={f.logo_url} alt="" loading="lazy" onerror={() => (failed = new Set(failed).add(f.channel_id))} />
+      {:else}
+        <span class="letter">{f.channel_name.trim().charAt(0).toUpperCase()}</span>
+      {/if}
+      <span class="badge live"><i></i>{playing ? 'On now' : 'Live'}</span>
+      <span class="play" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.14v13.72a1 1 0 001.5.86l11-6.86a1 1 0 000-1.72l-11-6.86A1 1 0 008 5.14z"/></svg>
+      </span>
+    </span>
+    <span class="name" dir="auto">{f.channel_name}</span>
+    <span class="sub" dir="auto">{f.group_name}</span>
+  </button>
+{/snippet}
+
+{#snippet poster(f: FavoriteChannel)}
+  {@const t = splitTitle(f.channel_name)}
+  {@const p = progress[f.channel_id]}
+  <button class="poster" onclick={() => open(f)} aria-label={t.title}>
+    <span class="art">
+      {#if f.logo_url && !failed.has(f.channel_id)}
+        <img src={f.logo_url} alt="" loading="lazy" onerror={() => (failed = new Set(failed).add(f.channel_id))} />
+      {:else}
+        <span class="art-empty" dir="auto">{t.title}</span>
+      {/if}
+      <span class="badge">{f.content_type === 'series' ? 'Series' : 'Movie'}</span>
+      {#if continueAt[f.channel_id]}
+        <span class="resume">Continue {continueAt[f.channel_id]}</span>
+      {/if}
+      {#if p}<span class="bar" aria-label={`${Math.round(p * 100)}% watched`}><span style:width="{p * 100}%"></span></span>{/if}
+      <span class="play" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.14v13.72a1 1 0 001.5.86l11-6.86a1 1 0 000-1.72l-11-6.86A1 1 0 008 5.14z"/></svg>
+      </span>
+    </span>
+    <span class="name" dir="auto">{t.title}</span>
+    <span class="sub">{t.year ? `${t.year} · ` : ''}{addedAgo(f.added_at)}</span>
+  </button>
+{/snippet}
+
+{#snippet itemTools(f: FavoriteChannel)}
+  {@const own = lists.filter((l) => l.kind === f.content_type)}
+  {@const cur = listOf(f)}
+  <button
+    class="sort-btn"
+    class:has={!!cur}
+    style:--c={cur ? colorOf(cur) : undefined}
+    onclick={() => { menuFor = menuFor === f.channel_id ? null : f.channel_id; menuDraft = ''; }}
+    aria-label="Category"
+    aria-expanded={menuFor === f.channel_id}
+    title={cur ? `Category: ${cur.name}` : 'Put in a category'}
+  >
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"><path d="M3 7.5A1.5 1.5 0 014.5 6h4.4l2 2.2h8.6A1.5 1.5 0 0121 9.7v8.8a1.5 1.5 0 01-1.5 1.5h-15A1.5 1.5 0 013 18.5z"/></svg>
+  </button>
+  <button class="remove" onclick={() => remove(f)} aria-label={`Remove ${f.channel_name} from My list`} title="Remove from My list">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+  </button>
+  {#if menuFor === f.channel_id}
+    <div class="menu" role="menu" aria-label="Category" transition:fly={{ y: -6, duration: 140 }}>
+      <p class="menu-head">{KIND_LABEL[f.content_type]} category</p>
+      {#each own as l (l.id)}
+        <button role="menuitemradio" aria-checked={cur?.id === l.id} onclick={() => setList(f, l.id)}>
+          <i class="dot" style:background={colorOf(l)}></i>
+          <span dir="auto">{l.name}</span>
+          {#if cur?.id === l.id}<svg class="tick" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>{/if}
         </button>
       {/each}
-      {#if $favorites.length === 0}
-        <div class="col-empty">No favorites yet</div>
+      {#if cur}
+        <button role="menuitem" class="muted" onclick={() => setList(f, null)}>Take out of “{cur.name}”</button>
+      {/if}
+      <form class="menu-new" onsubmit={(e) => { e.preventDefault(); newListFor(f); }}>
+        <input bind:value={menuDraft} placeholder={own.length ? 'New category…' : 'Name your first category…'} dir="auto" maxlength="40" aria-label="New category" />
+        <button type="submit" disabled={!menuDraft.trim()} aria-label="Create and add">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        </button>
+      </form>
+    </div>
+  {/if}
+{/snippet}
+
+<div class="mylist">
+  <header class="head">
+    <div class="titles">
+      <h1>My list</h1>
+      {#if loaded}
+        <p>
+          {#if counts.all}
+            {nf.format(counts.all)} saved
+            {#if counts.live} · {nf.format(counts.live)} {counts.live === 1 ? 'channel' : 'channels'}{/if}
+            {#if counts.vod} · {nf.format(counts.vod)} {counts.vod === 1 ? 'movie' : 'movies'}{/if}
+            {#if counts.series} · {nf.format(counts.series)} series{/if}
+          {:else}
+            Everything you save shows up here
+          {/if}
+        </p>
       {/if}
     </div>
-  </div>
 
-  <!-- Column 2: Channels list -->
-  <div class="col col-channels">
-    <div class="col-header">
-      <h2 class="truncate">{selectedCategory ?? 'All Favorites'}</h2>
-      <span class="count-badge">{filteredFavorites().length}</span>
-    </div>
-    <div class="col-scroll">
-      {#if filteredFavorites().length === 0}
-        <div class="col-empty">No channels in this category</div>
-      {:else}
-        {#each filteredFavorites() as fav (fav.id)}
-          <div class="ch-row" class:active={playingChannel?.channel_id === fav.channel_id}>
-            <button class="ch-btn" onclick={() => playFav(fav)}>
-              {#if fav.logo_url}
-                <img class="ch-icon" src={fav.logo_url} alt="" loading="lazy" />
-              {:else}
-                <div class="ch-icon placeholder">
-                  <span>{fav.channel_name.charAt(0).toUpperCase()}</span>
-                </div>
-              {/if}
-              <div class="ch-text">
-                <span class="ch-name">{fav.channel_name}</span>
-                <span class="ch-meta">{fav.group_name}</span>
-              </div>
-              {#if playingChannel?.channel_id === fav.channel_id}
-                <div class="now-playing">
-                  <span class="bar"></span><span class="bar"></span><span class="bar"></span>
-                </div>
-              {/if}
-            </button>
-            <button class="remove-btn" onclick={() => handleRemove(fav)} title="Remove">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-            </button>
-          </div>
-        {/each}
-      {/if}
-    </div>
-  </div>
-
-  <!-- Column 3: Player -->
-  <div class="col col-player">
-    {#if playingChannel}
-      {#if usingMpv}
-        <!-- MPV player panel -->
-        <div class="mpv-panel">
-          <div class="mpv-display">
-            {#if playingChannel.logo_url}
-              <img class="mpv-logo" src={playingChannel.logo_url} alt="" />
-            {:else}
-              <div class="mpv-logo placeholder">
-                <span>{playingChannel.channel_name.charAt(0).toUpperCase()}</span>
-              </div>
-            {/if}
-            <div class="mpv-info">
-              <h3>{playingChannel.channel_name}</h3>
-              <span class="mpv-group">{playingChannel.group_name} &middot; {playingChannel.category}</span>
-              {#if playerLoading}
-                <span class="mpv-status loading">Starting MPV...</span>
-              {:else if playerError}
-                <span class="mpv-status error">{playerError}</span>
-              {:else}
-                <span class="mpv-status live">Playing in MPV</span>
-              {/if}
-            </div>
-          </div>
-          <div class="mpv-controls">
-            <button class="mpv-btn" onclick={() => mpvPause()} title="Pause/Play">
-              <svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
-            </button>
-            <button class="mpv-btn" onclick={() => mpvFullscreen()} title="Fullscreen">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><polyline points="21 3 14 10"/><polyline points="3 21 10 14"/></svg>
-            </button>
-            <button class="mpv-btn stop" onclick={stopPlaying} title="Stop">
-              <svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>
-            </button>
-          </div>
-        </div>
-      {:else}
-        <!-- Browser inline player (VOD) -->
-        <div class="inline-player" bind:this={playerContainerEl}>
-          <div class="player-wrapper">
-            <!-- svelte-ignore a11y_media_has_caption -->
-            <video
-              bind:this={videoEl}
-              autoplay playsinline preload="auto"
-              onplay={() => { playerPaused = false; playerLoading = false; }}
-              onpause={() => { playerPaused = true; }}
-              onwaiting={() => { playerLoading = true; }}
-              onplaying={() => { playerLoading = false; playerError = ''; retryCount = 0; }}
-              onstalled={() => { if (!playerPaused) playerLoading = true; }}
-              class="player-video"
-            ></video>
-            {#if playerLoading && !playerError && !vodPlayingExternal}
-              <div class="player-overlay"><div class="spinner"></div></div>
-            {/if}
-            {#if vodPlayingExternal}
-              <div class="player-overlay external">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="ext-icon"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
-                <span class="ext-text">Playing in {externalPlayers[0]?.name ?? 'external player'}</span>
-              </div>
-            {/if}
-            {#if playerError}
-              <div class="player-overlay"><span class="player-error">{playerError}</span></div>
-            {/if}
-          </div>
-          <div class="player-bar">
-            <div class="player-info">
-              {#if playingChannel.logo_url}
-                <img class="player-ch-icon" src={playingChannel.logo_url} alt="" />
-              {/if}
-              <span class="player-ch-name">{playingChannel.channel_name}</span>
-            </div>
-            <div class="player-controls">
-              {#if !vodPlayingExternal}
-                <button class="ctrl-btn" onclick={togglePlay} title={playerPaused ? 'Play' : 'Pause'}>
-                  {#if playerPaused}
-                    <svg viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-                  {:else}
-                    <svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
-                  {/if}
-                </button>
-                <button class="ctrl-btn" onclick={toggleFullscreen} title="Fullscreen">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><polyline points="21 3 14 10"/><polyline points="3 21 10 14"/></svg>
-                </button>
-              {/if}
-              {#if externalPlayers.length > 0}
-                <button class="ctrl-btn" onclick={openCurrentInPlayer} title="Open in {externalPlayers[0].name}">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
-                </button>
-              {/if}
-              <button class="ctrl-btn" onclick={stopPlaying} title="Close">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-              </button>
-            </div>
-          </div>
-        </div>
-      {/if}
-
-      <!-- Now playing info -->
-      <div class="now-info">
-        {#if playingChannel.logo_url}
-          <img class="now-logo" src={playingChannel.logo_url} alt="" />
+    {#if counts.all}
+      <label class="search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="16.5" y1="16.5" x2="21" y2="21"/></svg>
+        <input bind:value={query} placeholder="Search my list" aria-label="Search my list" dir="auto" />
+        {#if query}
+          <button class="clear" onclick={() => (query = '')} aria-label="Clear">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
         {/if}
-        <div class="now-text">
-          <h3>{playingChannel.channel_name}</h3>
-          <span>{playingChannel.group_name} &middot; {playingChannel.category}</span>
-        </div>
+      </label>
+    {/if}
+  </header>
+
+  {#if loaded && counts.all}
+    <div class="toolbar">
+      <div class="tabs" role="tablist" aria-label="Type">
+        {#each [['all', 'All'], ['live', 'Channels'], ['vod', 'Movies'], ['series', 'Series']] as [key, label] (key)}
+          {@const n = counts[key as Tab]}
+          <button role="tab" aria-selected={tab === key} class:on={tab === key} disabled={key !== 'all' && !n} onclick={() => (tab = key as Tab)}>
+            {label}<span>{nf.format(n)}</span>
+          </button>
+        {/each}
       </div>
-    {:else}
-      <div class="col-placeholder">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
-        <p>Select a channel to play</p>
+      <div class="right">
+        <Dropdown
+          label="Sort"
+          value={sort}
+          options={[{ value: 'added', label: 'Recently added' }, { value: 'name', label: 'A–Z' }]}
+          onchange={(v) => (sort = v as Sort)}
+        />
+      </div>
+    </div>
+
+    {#if tab !== 'all'}
+      <!-- Your categories for this type -->
+      <div class="cats" role="toolbar" aria-label="{KIND_LABEL[tab]} categories">
+        <button class="chip" class:on={listFilter === null} onclick={() => (listFilter = null)}>
+          All <span>{nf.format(counts[tab])}</span>
+        </button>
+        {#each kindLists as l (l.id)}
+          {#if draft?.id === l.id}
+            <input class="chip-input" bind:this={draftEl} bind:value={draft.name} onkeydown={(e) => { if (e.key === 'Enter') saveDraft(); else if (e.key === 'Escape') draft = null; }} onblur={saveDraft} dir="auto" maxlength="40" aria-label="Category name" />
+          {:else}
+            <div class="chip-wrap" class:on={listFilter === l.id}>
+              <button class="chip" class:on={listFilter === l.id} onclick={() => (listFilter = listFilter === l.id ? null : l.id)}>
+                <i class="dot" style:background={colorOf(l)}></i>
+                <b dir="auto">{l.name}</b>
+                <span>{nf.format(listCounts.get(l.id) ?? 0)}</span>
+              </button>
+              <span class="chip-tools">
+                {#if confirmDelete === l.id}
+                  <button class="danger" onclick={() => deleteList(l)} onblur={() => (confirmDelete = null)}>Delete?</button>
+                {:else}
+                  <button onclick={() => startDraft(l.id, l.name)} aria-label="Rename {l.name}" title="Rename">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L19 9l-4-4L4 16v4z"/></svg>
+                  </button>
+                  <button onclick={() => deleteList(l)} aria-label="Delete {l.name}" title="Delete category">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>
+                  </button>
+                {/if}
+              </span>
+            </div>
+          {/if}
+        {/each}
+        {#if kindLists.length && listCounts.get('none')}
+          <button class="chip" class:on={listFilter === 'none'} onclick={() => (listFilter = listFilter === 'none' ? null : 'none')}>
+            Not sorted <span>{nf.format(listCounts.get('none') ?? 0)}</span>
+          </button>
+        {/if}
+        {#if draft && draft.id === null}
+          <input class="chip-input" bind:this={draftEl} bind:value={draft.name} onkeydown={(e) => { if (e.key === 'Enter') saveDraft(); else if (e.key === 'Escape') draft = null; }} onblur={saveDraft} placeholder="Category name" dir="auto" maxlength="40" aria-label="New category name" />
+        {:else}
+          <button class="chip add" onclick={() => startDraft(null)}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            New category
+          </button>
+        {/if}
+        {#if !kindLists.length && !draft}<p class="cats-hint">{KIND_HINT[tab]}</p>{/if}
       </div>
     {/if}
-  </div>
+  {/if}
+
+  {#if !loaded}
+    <div class="grid posters" aria-hidden="true">
+      {#each Array(12) as _, i (i)}<div class="sk poster-sk"></div>{/each}
+    </div>
+  {:else if !counts.all}
+    <!-- First-time empty state -->
+    <section class="empty" in:fade={{ duration: 200 }}>
+      <div class="empty-art" aria-hidden="true">
+        <span class="card c1"></span><span class="card c2"></span><span class="card c3"></span>
+      </div>
+      <h2>Your list is empty</h2>
+      <p>Save the channels you watch every day and the movies and series you want to get to. They'll all be one click away here.</p>
+      <ul class="how">
+        <li><b>Channels:</b> hover a channel in Live TV and press <span class="k">♡</span></li>
+        <li><b>Movies & series:</b> open one and press <span class="k">+</span> next to Play</li>
+      </ul>
+      <div class="cta">
+        <button class="primary" onclick={() => goto('/live')}>Browse Live TV</button>
+        <button onclick={() => goto('/browse?type=vod')}>Movies</button>
+        <button onclick={() => goto('/browse?type=series')}>Series</button>
+      </div>
+    </section>
+  {:else if !shown.length}
+    <div class="none">
+      <strong>Nothing here matches</strong>
+      <span>{query ? `No saved titles contain “${query.trim()}”.` : 'No saved titles in this view.'}</span>
+      <button onclick={() => { query = ''; tab = 'all'; listFilter = null; }}>Show everything</button>
+    </div>
+  {:else}
+    {#each sections as sec (sec.kind)}
+      <section class="block">
+        {#if tab === 'all'}
+          <h2>
+            <button class="h2-link" onclick={() => (tab = sec.kind)}>{KIND_LABEL[sec.kind]} <span>{nf.format(sec.count)}</span></button>
+          </h2>
+        {/if}
+        {#each sec.groups as g (g.list?.id ?? 'none')}
+          {#if sec.grouped}
+            <h3 class="group-head">
+              {#if g.list}
+                <i class="dot" style:background={colorOf(g.list)}></i>
+                <button onclick={() => { const id = g.list!.id; tab = sec.kind; tick().then(() => (listFilter = id)); }} dir="auto">{g.list.name}</button>
+              {:else}
+                <span class="muted">Not sorted</span>
+              {/if}
+              <em>{nf.format(g.items.length)}</em>
+            </h3>
+          {/if}
+          <div class="grid" class:tiles={sec.kind === 'live'} class:posters={sec.kind !== 'live'}>
+            {#each g.items as f (f.channel_id)}
+              <div class="item" class:menu-open={menuFor === f.channel_id} animate:flip={{ duration: 220 }} out:fade={{ duration: 150 }}>
+                {#if sec.kind === 'live'}
+                  {@render tile(f)}
+                {:else}
+                  {@render poster(f)}
+                {/if}
+                {@render itemTools(f)}
+              </div>
+            {/each}
+          </div>
+        {/each}
+      </section>
+    {/each}
+  {/if}
+
+  {#if note}
+    <div class="toast" role="status" transition:fly={{ y: 16, duration: 180 }}><span>{note}</span></div>
+  {/if}
+
+  {#if undo}
+    <div class="toast" role="status" transition:fly={{ y: 16, duration: 180 }}>
+      <span>Removed <b dir="auto">{splitTitle(undo.channel_name).title}</b></span>
+      <button onclick={restore}>Undo</button>
+    </div>
+  {/if}
 </div>
 
 <style>
-  .fav-page {
-    display: grid;
-    grid-template-columns: 240px 320px 1fr;
-    height: calc(100vh - 48px);
+  .mylist {
+    --gutter: clamp(24px, 3.6vw, 60px);
     margin: -24px;
-    background: var(--color-base);
+    min-height: 100vh;
+    padding: 36px var(--gutter) 80px;
+    background: radial-gradient(60% 40% at 85% 0%, oklch(0.4 0.15 27 / 0.16), transparent 70%);
   }
 
-  .truncate { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-
-  .col {
+  .head {
     display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    border-right: 1px solid var(--color-border);
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 20px;
+    margin-bottom: 22px;
   }
-  .col:last-child { border-right: none; }
+  .titles h1 { font-size: clamp(2.25rem, 3.6vw, 3.25rem); font-weight: 900; letter-spacing: -0.035em; }
+  .titles p { margin-top: 4px; color: var(--color-text-muted); font-variant-numeric: tabular-nums; }
 
-  .col-header {
+  .search {
+    position: relative;
+    display: flex;
+    align-items: center;
+    width: min(340px, 40vw);
+    height: 44px;
+    padding: 0 10px 0 40px;
+    border-radius: 8px;
+    background: oklch(1 0 0 / 0.06);
+    box-shadow: inset 0 0 0 1px oklch(1 0 0 / 0.1);
+    cursor: text;
+  }
+  .search:focus-within { box-shadow: inset 0 0 0 2px var(--color-text); }
+  .search > :global(svg) { position: absolute; left: 13px; width: 18px; height: 18px; color: var(--color-text-muted); }
+  .search input { flex: 1; min-width: 0; height: 100%; padding: 0; border: none; background: none; font-size: 0.9375rem; }
+  .search input:focus { border: none; }
+  .clear { width: 26px; height: 26px; display: grid; place-items: center; border-radius: 50%; background: oklch(1 0 0 / 0.1); color: var(--color-text); }
+  .clear :global(svg) { width: 12px; height: 12px; }
+
+  .toolbar {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 16px 14px 12px;
-    border-bottom: 1px solid var(--color-border);
-    flex-shrink: 0;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-bottom: 28px;
   }
-  .col-header h2 { font-size: 15px; font-weight: 700; }
+  .tabs { display: flex; gap: 6px; }
+  .tabs button {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    height: 38px;
+    padding: 0 16px;
+    border-radius: 19px;
+    background: oklch(1 0 0 / 0.06);
+    color: oklch(0.85 0.004 25);
+    font-size: 0.875rem;
+    font-weight: 700;
+    transition: background 150ms var(--ease-out), color 150ms var(--ease-out);
+  }
+  .tabs button span { font-size: 0.75rem; opacity: 0.6; font-variant-numeric: tabular-nums; }
+  .tabs button:hover:not(:disabled) { background: oklch(1 0 0 / 0.12); }
+  .tabs button.on { background: var(--color-text); color: oklch(0.14 0.004 25); }
+  .tabs button:disabled { opacity: 0.35; }
+  .tabs button:focus-visible { outline: 2px solid var(--color-text); outline-offset: 2px; }
 
-  .col-scroll { flex: 1; overflow-y: auto; padding: 6px; }
-  .col-empty { display: flex; align-items: center; justify-content: center; height: 80px; color: var(--color-text-muted); font-size: 13px; }
-  .col-placeholder { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: var(--color-text-muted); }
-  .col-placeholder :global(svg) { width: 40px; height: 40px; opacity: 0.2; }
-  .col-placeholder p { font-size: 13px; }
+  .right { display: flex; gap: 8px; --dd-bg: oklch(1 0 0 / 0.06); --dd-border: oklch(1 0 0 / 0.1); --dd-h: 38px; }
 
-  .total-badge, .count-badge {
-    font-size: 11px; color: var(--color-text-muted); background: var(--color-surface);
-    padding: 2px 8px; border-radius: 8px; flex-shrink: 0;
+  /* Your categories */
+  .cats { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: -12px 0 28px; }
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    height: 34px;
+    padding: 0 14px;
+    border-radius: 17px;
+    background: none;
+    box-shadow: inset 0 0 0 1px oklch(1 0 0 / 0.14);
+    color: oklch(0.85 0.004 25);
+    font-size: 0.8125rem;
+    font-weight: 700;
+    transition: background 120ms var(--ease-out), color 120ms var(--ease-out);
+  }
+  .chip b { font-weight: 700; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chip span { font-size: 0.75rem; opacity: 0.6; font-variant-numeric: tabular-nums; }
+  .chip:hover { background: oklch(1 0 0 / 0.07); color: var(--color-text); }
+  .chip.on { background: oklch(1 0 0 / 0.14); box-shadow: inset 0 0 0 1px oklch(1 0 0 / 0.3); color: var(--color-text); }
+  .chip.add { box-shadow: inset 0 0 0 1px oklch(1 0 0 / 0.14); color: var(--color-text-muted); border: 1px dashed transparent; }
+  .chip.add :global(svg) { width: 13px; height: 13px; }
+  .chip-wrap { position: relative; display: inline-flex; }
+  .chip-tools {
+    position: absolute;
+    right: 3px;
+    top: 3px;
+    bottom: 3px;
+    display: none;
+    gap: 2px;
+    padding-left: 10px;
+    border-radius: 0 15px 15px 0;
+    background: linear-gradient(to right, transparent, oklch(0.25 0.005 25) 10px);
+  }
+  .chip-wrap:hover .chip-tools, .chip-wrap:focus-within .chip-tools { display: flex; }
+  .chip-wrap:hover .chip span { visibility: hidden; }
+  .chip-tools button {
+    width: 28px;
+    display: grid;
+    place-items: center;
+    border-radius: 14px;
+    background: none;
+    color: var(--color-text-muted);
+  }
+  .chip-tools button:hover { background: oklch(1 0 0 / 0.12); color: var(--color-text); }
+  .chip-tools :global(svg) { width: 13px; height: 13px; }
+  .chip-tools .danger { width: auto; padding: 0 10px; color: var(--color-accent-soft); font-size: 0.75rem; font-weight: 800; }
+  .chip-input {
+    height: 34px;
+    width: 190px;
+    padding: 0 14px;
+    border: none;
+    border-radius: 17px;
+    background: var(--color-base);
+    box-shadow: inset 0 0 0 2px var(--color-accent);
+    color: var(--color-text);
+    font-size: 0.8125rem;
+    font-weight: 700;
+    text-align: left;
+  }
+  .cats-hint { font-size: 0.8125rem; color: var(--color-text-muted); margin-left: 4px; }
+  .dot { display: inline-block; flex: none; width: 9px; height: 9px; border-radius: 50%; }
+
+  .block { margin-bottom: 44px; }
+  .block h2 { font-size: 1.25rem; font-weight: 800; letter-spacing: -0.01em; margin-bottom: 14px; }
+  .h2-link { display: inline-flex; align-items: baseline; gap: 10px; background: none; color: inherit; font: inherit; }
+  .h2-link span { font-size: 0.875rem; font-weight: 600; color: var(--color-text-muted); }
+  .h2-link:hover { text-decoration: underline; text-underline-offset: 4px; }
+  .group-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 22px 0 12px;
+    font-size: 1rem;
+    font-weight: 800;
+  }
+  .block h2 + .group-head { margin-top: 4px; }
+  .group-head button { background: none; color: inherit; font: inherit; text-align: left; }
+  .group-head button:hover { text-decoration: underline; text-underline-offset: 3px; }
+  .group-head em { font-style: normal; font-size: 0.8125rem; font-weight: 600; color: var(--color-text-muted); }
+  .group-head .muted { color: var(--color-text-muted); }
+
+  /* Category button + menu on each item */
+  .sort-btn {
+    position: absolute;
+    top: 8px;
+    right: 44px;
+    z-index: 2;
+    width: 30px;
+    height: 30px;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    background: oklch(0.12 0.004 25 / 0.85);
+    color: var(--color-text);
+    box-shadow: 0 0 0 1px oklch(1 0 0 / 0.2);
+    opacity: 0;
+    transform: scale(0.85);
+    transition: opacity 150ms var(--ease-out), transform 150ms var(--ease-out), background 150ms var(--ease-out);
+  }
+  .sort-btn :global(svg) { width: 14px; height: 14px; }
+  .sort-btn:hover { background: oklch(0.3 0.006 25); }
+  .item:hover .sort-btn, .sort-btn:focus-visible, .item.menu-open .sort-btn { opacity: 1; transform: none; }
+  .item.menu-open { z-index: 10; }
+  .item.menu-open .remove { opacity: 1; transform: none; }
+  .menu {
+    position: absolute;
+    top: 44px;
+    right: 8px;
+    z-index: 20;
+    width: 240px;
+    display: flex;
+    flex-direction: column;
+    padding: 6px;
+    border-radius: 10px;
+    background: oklch(0.22 0.005 25);
+    box-shadow: 0 22px 48px -12px oklch(0 0 0 / 0.85), 0 0 0 1px oklch(1 0 0 / 0.1);
+  }
+  .menu-head { padding: 6px 8px 6px; font-size: 0.6875rem; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; color: var(--color-text-muted); }
+  .menu > button {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    min-height: 34px;
+    padding: 0 9px;
+    border-radius: 6px;
+    background: none;
+    color: oklch(0.9 0.004 25);
+    font-size: 0.8125rem;
+    font-weight: 600;
+    text-align: left;
+  }
+  .menu > button span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .menu > button:hover { background: oklch(1 0 0 / 0.08); color: var(--color-text); }
+  .menu > button.muted { color: var(--color-text-muted); }
+  .tick { width: 15px; height: 15px; color: var(--color-accent-soft); }
+  .menu-new { display: flex; gap: 4px; margin-top: 4px; padding-top: 6px; border-top: 1px solid oklch(1 0 0 / 0.08); }
+  .menu-new input {
+    flex: 1;
+    min-width: 0;
+    height: 32px;
+    padding: 0 9px;
+    border: none;
+    border-radius: 6px;
+    background: var(--color-base);
+    box-shadow: inset 0 0 0 1px var(--color-border);
+    font-size: 0.8125rem;
+    text-align: left;
+  }
+  .menu-new input:focus { box-shadow: inset 0 0 0 2px var(--color-text-muted); }
+  .menu-new button { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 6px; background: var(--color-text); color: oklch(0.14 0.004 25); }
+  .menu-new button:disabled { opacity: 0.35; }
+  .menu-new :global(svg) { width: 14px; height: 14px; }
+
+  .grid { display: grid; gap: 26px 14px; }
+  .tiles { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+  .posters { grid-template-columns: repeat(auto-fill, minmax(clamp(140px, 11vw, 180px), 1fr)); }
+
+  .item { position: relative; min-width: 0; }
+
+  .tile, .poster {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 0;
+    background: none;
+    color: var(--color-text);
+    text-align: start;
+    border-radius: 8px;
+  }
+  .tile:focus-visible, .poster:focus-visible { outline: none; }
+  .tile:focus-visible .tile-art, .poster:focus-visible .art { outline: 2px solid var(--color-text); outline-offset: 3px; }
+
+  .tile-art, .art {
+    position: relative;
+    display: grid;
+    place-items: center;
+    border-radius: 8px;
+    overflow: hidden;
+    background: oklch(0.22 0.005 25);
+    transition: transform 240ms var(--ease-out), box-shadow 240ms var(--ease-out);
+  }
+  .tile-art { aspect-ratio: 16 / 9; box-shadow: inset 0 0 0 1px oklch(1 0 0 / 0.06); }
+  .tile-art img { width: 100%; height: 100%; object-fit: contain; padding: 16% 22%; }
+  .tile.playing .tile-art { box-shadow: inset 0 0 0 2px var(--color-accent); }
+  .letter { font-size: 2rem; font-weight: 900; color: var(--color-text-muted); }
+  .art { aspect-ratio: 2 / 3; }
+  .art img { width: 100%; height: 100%; object-fit: cover; }
+  .art-empty {
+    display: flex;
+    align-items: flex-end;
+    width: 100%;
+    height: 100%;
+    padding: 12px;
+    font-weight: 800;
+    background: radial-gradient(120% 80% at 100% 0%, oklch(0.42 0.16 27 / 0.55), transparent 60%), var(--color-card);
   }
 
-  /* Column 1 - Categories */
-  .cat-item {
-    display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
-    padding: 8px 10px; border-radius: 8px; background: transparent;
-    color: var(--color-text); font-size: 13px; margin-bottom: 2px;
-    transition: background var(--transition-fast);
-  }
-  .cat-item:hover { background: var(--color-hover); }
-  .cat-item.active { background: var(--color-surface); border: 1px solid var(--color-border); }
-
-  .cat-icon {
-    width: 32px; height: 32px; display: flex; align-items: center; justify-content: center;
-    background: var(--color-surface); border-radius: 8px; color: var(--color-text-muted); flex-shrink: 0;
-  }
-  .cat-item.active .cat-icon { background: rgba(233, 69, 96, 0.12); color: var(--color-accent); }
-  .cat-icon :global(svg) { width: 16px; height: 16px; }
-  .cat-name { flex: 1; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .cat-count { font-size: 11px; color: var(--color-text-muted); background: var(--color-surface); padding: 1px 7px; border-radius: 8px; flex-shrink: 0; }
-
-  /* Column 2 - Channel list */
-  .ch-row {
-    display: flex; align-items: center; border-radius: 8px; margin-bottom: 1px;
-    transition: background var(--transition-fast);
-  }
-  .ch-row:hover { background: var(--color-hover); }
-  .ch-row.active { background: rgba(233, 69, 96, 0.08); }
-
-  .ch-btn {
-    display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0;
-    text-align: left; padding: 6px 10px; background: transparent; color: var(--color-text);
+  .tile:hover .tile-art, .poster:hover .art {
+    transform: translateY(-4px);
+    box-shadow: 0 20px 40px -16px oklch(0 0 0 / 0.85), 0 0 0 1px oklch(1 0 0 / 0.12);
   }
 
-  .ch-icon { width: 36px; height: 36px; border-radius: 8px; object-fit: contain; background: var(--color-surface); flex-shrink: 0; }
-  .ch-icon.placeholder { display: flex; align-items: center; justify-content: center; }
-  .ch-icon.placeholder span { font-size: 14px; font-weight: 700; color: var(--color-accent); opacity: 0.5; }
-
-  .ch-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-  .ch-name { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .ch-meta { font-size: 11px; color: var(--color-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-
-  .remove-btn {
-    width: 28px; height: 28px; display: flex; align-items: center; justify-content: center;
-    border-radius: 6px; background: transparent; color: var(--color-text-muted);
-    opacity: 0; transition: all var(--transition-fast); flex-shrink: 0; margin-right: 6px;
+  .badge {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 7px;
+    border-radius: 3px;
+    background: oklch(0.12 0.004 25 / 0.8);
+    font-size: 0.625rem;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
   }
-  .ch-row:hover .remove-btn { opacity: 1; }
-  .remove-btn:hover { background: rgba(233, 69, 96, 0.1); color: var(--color-accent); }
-  .remove-btn :global(svg) { width: 14px; height: 14px; }
+  .badge.live { background: var(--color-accent); color: var(--color-on-accent); }
+  .badge i { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
 
-  .now-playing { display: flex; align-items: flex-end; gap: 2px; height: 14px; flex-shrink: 0; }
-  .now-playing .bar { width: 3px; background: var(--color-accent); border-radius: 1px; animation: bars 0.8s ease-in-out infinite alternate; }
-  .now-playing .bar:nth-child(1) { height: 40%; animation-delay: 0s; }
-  .now-playing .bar:nth-child(2) { height: 70%; animation-delay: 0.2s; }
-  .now-playing .bar:nth-child(3) { height: 50%; animation-delay: 0.4s; }
-  @keyframes bars { 0% { height: 30%; } 100% { height: 100%; } }
-
-  /* MPV panel */
-  .mpv-panel { flex-shrink: 0; border-bottom: 1px solid var(--color-border); padding: 20px; background: linear-gradient(135deg, var(--color-card), var(--color-surface)); display: flex; flex-direction: column; gap: 16px; }
-  .mpv-display { display: flex; align-items: center; gap: 16px; }
-  .mpv-logo { width: 64px; height: 64px; border-radius: 12px; object-fit: contain; background: var(--color-surface); flex-shrink: 0; }
-  .mpv-logo.placeholder { display: flex; align-items: center; justify-content: center; }
-  .mpv-logo.placeholder span { font-size: 24px; font-weight: 700; color: var(--color-accent); opacity: 0.5; }
-  .mpv-info { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-  .mpv-info h3 { font-size: 16px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .mpv-group { font-size: 12px; color: var(--color-text-muted); }
-  .mpv-status { font-size: 11px; font-weight: 600; }
-  .mpv-status.live { color: var(--color-accent-green); }
-  .mpv-status.loading { color: var(--color-accent-yellow); animation: pulse 1.5s ease-in-out infinite; }
-  .mpv-status.error { color: var(--color-accent); }
-  .mpv-controls { display: flex; gap: 8px; }
-  .mpv-btn { height: 36px; padding: 0 16px; display: flex; align-items: center; justify-content: center; border-radius: 8px; background: var(--color-surface); color: var(--color-text); font-size: 12px; transition: all var(--transition-fast); }
-  .mpv-btn:hover { background: var(--color-hover); }
-  .mpv-btn.stop { color: var(--color-accent); }
-  .mpv-btn.stop:hover { background: rgba(233, 69, 96, 0.1); }
-  .mpv-btn :global(svg) { width: 16px; height: 16px; }
-
-  /* Column 3 - Player */
-  .inline-player { flex-shrink: 0; border-bottom: 1px solid var(--color-border); background: #000; }
-  .inline-player:fullscreen { display: flex; flex-direction: column; }
-  .inline-player:fullscreen .player-wrapper { flex: 1; max-height: none; aspect-ratio: auto; }
-
-  .player-wrapper { width: 100%; aspect-ratio: 16 / 9; background: #000; position: relative; }
-  .player-video { width: 100%; height: 100%; object-fit: contain; background: #000; }
-
-  .player-overlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.5); pointer-events: none; }
-  .player-overlay.external { flex-direction: column; gap: 8px; background: rgba(0,0,0,0.7); }
-  .ext-icon { width: 40px; height: 40px; color: var(--color-accent-green); opacity: 0.8; }
-  .ext-text { font-size: 13px; color: rgba(255,255,255,0.7); }
-  .spinner { width: 36px; height: 36px; border: 3px solid rgba(255,255,255,0.15); border-top-color: var(--color-accent); border-radius: 50%; animation: spin 0.8s linear infinite; }
-  @keyframes spin { to { transform: rotate(360deg); } }
-  .player-error { font-size: 13px; color: var(--color-accent); background: rgba(0,0,0,0.6); padding: 6px 14px; border-radius: 8px; }
-
-  .player-bar { display: flex; align-items: center; justify-content: space-between; padding: 6px 12px; background: var(--color-card); gap: 8px; }
-  .player-info { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; }
-  .player-ch-icon { width: 24px; height: 24px; border-radius: 4px; object-fit: contain; background: var(--color-surface); flex-shrink: 0; }
-  .player-ch-name { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .player-controls { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
-
-  .ctrl-btn { width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; border-radius: 6px; background: transparent; color: var(--color-text-muted); transition: all var(--transition-fast); }
-  .ctrl-btn:hover { background: var(--color-hover); color: var(--color-text); }
-  .ctrl-btn :global(svg) { width: 16px; height: 16px; }
-
-  .now-info {
-    display: flex; align-items: center; gap: 14px; padding: 16px 20px;
-    border-bottom: 1px solid var(--color-border);
+  .resume {
+    position: absolute;
+    left: 8px;
+    right: 8px;
+    bottom: 12px;
+    padding: 4px 8px;
+    border-radius: 4px;
+    background: oklch(0.12 0.004 25 / 0.85);
+    font-size: 0.6875rem;
+    font-weight: 800;
+    text-align: center;
   }
-  .now-logo { width: 48px; height: 48px; border-radius: 10px; object-fit: contain; background: var(--color-surface); flex-shrink: 0; }
-  .now-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-  .now-text h3 { font-size: 15px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .now-text span { font-size: 12px; color: var(--color-text-muted); }
+  .bar { position: absolute; left: 0; right: 0; bottom: 0; height: 4px; background: oklch(1 0 0 / 0.25); }
+  .bar span { display: block; height: 100%; background: var(--color-accent); }
+
+  .play {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    background: oklch(0 0 0 / 0.35);
+    opacity: 0;
+    transition: opacity 180ms var(--ease-out);
+  }
+  .play :global(svg) {
+    width: 46px;
+    height: 46px;
+    padding: 12px 11px 12px 13px;
+    border-radius: 50%;
+    background: oklch(0.98 0.004 25 / 0.95);
+    color: oklch(0.14 0.004 25);
+  }
+  .tile:hover .play, .poster:hover .play, .tile:focus-visible .play, .poster:focus-visible .play { opacity: 1; }
+
+  .name { font-size: 0.875rem; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sub { margin-top: -5px; font-size: 0.75rem; color: var(--color-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  .remove {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    z-index: 2;
+    width: 30px;
+    height: 30px;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    background: oklch(0.12 0.004 25 / 0.85);
+    color: var(--color-text);
+    box-shadow: 0 0 0 1px oklch(1 0 0 / 0.2);
+    opacity: 0;
+    transform: scale(0.85);
+    transition: opacity 150ms var(--ease-out), transform 150ms var(--ease-out), background 150ms var(--ease-out);
+  }
+  .remove :global(svg) { width: 13px; height: 13px; }
+  .item:hover .remove, .remove:focus-visible { opacity: 1; transform: none; }
+  .remove:hover { background: var(--color-accent); }
+  .remove:focus-visible { outline: 2px solid var(--color-text); outline-offset: 2px; }
+
+  /* Empty */
+  .empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 14px;
+    max-width: 560px;
+    margin: 6vh auto 0;
+  }
+  .empty-art { position: relative; width: 220px; height: 150px; margin-bottom: 10px; }
+  .card { position: absolute; width: 92px; height: 132px; border-radius: 10px; background: oklch(0.24 0.005 25); box-shadow: 0 20px 40px -16px oklch(0 0 0 / 0.8), inset 0 0 0 1px oklch(1 0 0 / 0.06); }
+  .c1 { left: 10px; top: 14px; transform: rotate(-10deg); opacity: 0.6; }
+  .c3 { right: 10px; top: 14px; transform: rotate(10deg); opacity: 0.6; }
+  .c2 { left: 64px; top: 0; z-index: 1; }
+  .c2::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: 10px;
+    background: radial-gradient(80% 60% at 50% 30%, oklch(0.58 0.225 27 / 0.45), transparent 70%);
+  }
+  .empty-art::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 46px;
+    height: 46px;
+    translate: -50% -50%;
+    z-index: 2;
+    background: var(--color-accent);
+    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 21s-7.5-4.6-9.6-9.4C.9 8.1 3.2 4.5 6.9 4.5c2.1 0 3.6 1.1 5.1 3 1.5-1.9 3-3 5.1-3 3.7 0 6 3.6 4.5 7.1C19.5 16.4 12 21 12 21z'/%3E%3C/svg%3E") center / contain no-repeat;
+  }
+  .empty h2 { font-size: 2rem; font-weight: 900; letter-spacing: -0.03em; }
+  .empty p { color: var(--color-text-muted); line-height: 1.6; }
+  .how { list-style: none; display: flex; flex-direction: column; gap: 8px; font-size: 0.9375rem; color: oklch(0.85 0.004 25); }
+  .how b { color: var(--color-text); }
+  .k { display: inline-grid; place-items: center; min-width: 24px; height: 24px; padding: 0 6px; border-radius: 6px; background: oklch(1 0 0 / 0.1); font-weight: 800; }
+  .cta { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin-top: 10px; }
+  .cta button, .none button {
+    height: 44px;
+    padding: 0 20px;
+    border-radius: 6px;
+    background: oklch(1 0 0 / 0.1);
+    color: var(--color-text);
+    font-size: 0.9375rem;
+    font-weight: 700;
+    transition: background 150ms var(--ease-out);
+  }
+  .cta button:hover, .none button:hover { background: oklch(1 0 0 / 0.18); }
+  .cta .primary { background: var(--color-text); color: oklch(0.14 0.004 25); }
+  .cta .primary:hover { background: oklch(0.85 0.004 25); }
+
+  .none { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 60px 0; text-align: center; }
+  .none strong { font-size: 1.125rem; }
+  .none span { color: var(--color-text-muted); margin-bottom: 8px; }
+
+  .toast {
+    position: fixed;
+    left: 50%;
+    bottom: 28px;
+    z-index: 50;
+    translate: -50% 0;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 10px 10px 10px 18px;
+    border-radius: 8px;
+    background: var(--color-text);
+    color: oklch(0.14 0.004 25);
+    font-size: 0.875rem;
+    box-shadow: 0 20px 40px -12px oklch(0 0 0 / 0.7);
+  }
+  .toast button {
+    height: 32px;
+    padding: 0 14px;
+    border-radius: 5px;
+    background: oklch(0.14 0.004 25);
+    color: var(--color-text);
+    font-weight: 800;
+  }
+
+  .sk {
+    border-radius: 8px;
+    background: linear-gradient(90deg, oklch(1 0 0 / 0.05) 0%, oklch(1 0 0 / 0.1) 50%, oklch(1 0 0 / 0.05) 100%);
+    background-size: 200% 100%;
+    animation: shimmer 1.6s linear infinite;
+  }
+  .poster-sk { aspect-ratio: 2 / 3; }
+  @keyframes shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+
+  @media (prefers-reduced-motion: reduce) {
+    .sk { animation: none; }
+    .tile-art, .art, .remove, .play { transition: none; }
+  }
 </style>

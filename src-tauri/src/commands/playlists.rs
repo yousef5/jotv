@@ -2,6 +2,7 @@ use crate::db::models::{ChannelGroup, Playlist};
 use crate::db::Database;
 use crate::parsers::m3u;
 use crate::parsers::xtream::{self, SeriesDetail, VodDetail, XtreamAccountInfo, XtreamCredentials};
+use std::collections::HashMap;
 use rusqlite::params;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
@@ -182,6 +183,20 @@ struct ImportProgress {
     stage: String,
     current: usize,
     total: usize,
+    /// Refresh step: "connect" | "download" | "process" | "save" | "done"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    phase: Option<&'static str>,
+}
+
+/// What a refresh changed, for the "library updated" summary.
+#[derive(Clone, Serialize)]
+struct SyncSummary {
+    playlist_id: i64,
+    added_live: usize,
+    added_vod: usize,
+    added_series: usize,
+    updated: usize,
+    removed: usize,
 }
 
 #[tauri::command]
@@ -205,6 +220,7 @@ pub async fn add_playlist_from_xtream(
             stage: stage.to_string(),
             current,
             total,
+            phase: None,
         });
     });
 
@@ -215,6 +231,7 @@ pub async fn add_playlist_from_xtream(
         stage: format!("Saving {} channels to database...", total),
         current: 0,
         total,
+        phase: None,
     });
 
     let conn = db.conn.lock().unwrap();
@@ -235,8 +252,8 @@ pub async fn add_playlist_from_xtream(
     // Batch insert using prepared statement
     {
         let mut stmt = conn.prepare_cached(
-            "INSERT INTO channels (playlist_id, name, group_name, stream_url, logo_url, epg_id, content_type, added_on_server)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"
+            "INSERT INTO channels (playlist_id, name, group_name, stream_url, logo_url, epg_id, content_type, added_on_server, rating, year, genre)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"
         ).map_err(|e| { let _ = conn.execute_batch("ROLLBACK"); e.to_string() })?;
 
         for (i, ch) in channels.iter().enumerate() {
@@ -249,6 +266,9 @@ pub async fn add_playlist_from_xtream(
                 ch.epg_id,
                 ch.content_type,
                 ch.added_on_server,
+                ch.rating,
+                ch.year,
+                ch.genre,
             ])
             .map_err(|e| { let _ = conn.execute_batch("ROLLBACK"); e.to_string() })?;
 
@@ -258,6 +278,7 @@ pub async fn add_playlist_from_xtream(
                     stage: format!("Saving channels... {}/{}", i + 1, total),
                     current: i + 1,
                     total,
+                    phase: None,
                 });
             }
         }
@@ -270,6 +291,7 @@ pub async fn add_playlist_from_xtream(
         stage: "Import complete!".to_string(),
         current: total,
         total,
+        phase: None,
     });
 
     let playlist = conn
@@ -350,16 +372,16 @@ pub async fn refresh_playlist(
         ).map_err(|e| format!("Playlist not found: {}", e))?
     };
 
-    let emit = |stage: &str, current: usize, total: usize| {
+    let emit = |phase: &'static str, stage: &str, current: usize, total: usize| {
         let _ = app.emit("xtream-import-progress", ImportProgress {
-            stage: stage.to_string(), current, total,
+            stage: stage.to_string(), current, total, phase: Some(phase),
         });
     };
 
     // Fetch new data based on source type
-    emit("Fetching channels...", 0, 0);
+    emit("connect", "Connecting to the server...", 0, 0);
 
-    let channels: Vec<(String, String, String, Option<String>, Option<String>, String, i64)>;
+    let channels: Vec<xtream::XtreamChannel>;
 
     match source_type.as_str() {
         "xtream" => {
@@ -372,14 +394,12 @@ pub async fn refresh_playlist(
             };
             let app_c = app.clone();
             let on_progress = Box::new(move |stage: &str, current: usize, total: usize| {
+                let phase = if stage.starts_with("Processing") || stage.starts_with("Fetch complete") { "process" } else { "download" };
                 let _ = app_c.emit("xtream-import-progress", ImportProgress {
-                    stage: stage.to_string(), current, total,
+                    stage: stage.to_string(), current, total, phase: Some(phase),
                 });
             });
-            let xtream_channels = xtream::fetch_xtream_channels(&creds, Some(on_progress)).await?;
-            channels = xtream_channels.into_iter().map(|ch| {
-                (ch.name, ch.group, ch.stream_url, ch.logo_url, ch.epg_id, ch.content_type, ch.added_on_server)
-            }).collect();
+            channels = xtream::fetch_xtream_channels(&creds, Some(on_progress)).await?;
         }
         "m3u_url" => {
             let response = reqwest::get(&source_url)
@@ -388,8 +408,18 @@ pub async fn refresh_playlist(
             let content = response.text().await
                 .map_err(|e| format!("Failed to read M3U body: {}", e))?;
             let entries = m3u::parse_m3u(&content);
-            channels = entries.into_iter().map(|e| {
-                (e.name, e.group, e.stream_url, e.logo_url, e.epg_id, e.content_type, 0i64)
+            channels = entries.into_iter().map(|e| xtream::XtreamChannel {
+                name: e.name,
+                stream_id: 0,
+                stream_url: e.stream_url,
+                logo_url: e.logo_url,
+                epg_id: e.epg_id,
+                group: e.group,
+                content_type: e.content_type,
+                added_on_server: 0,
+                rating: None,
+                year: None,
+                genre: None,
             }).collect();
         }
         _ => {
@@ -398,35 +428,75 @@ pub async fn refresh_playlist(
     }
 
     let total = channels.len();
-    emit(&format!("Updating {} channels...", total), 0, total);
+    emit("save", &format!("Saving {} channels...", total), 0, total);
 
-    // Replace all channels in a single transaction
+    // Sync channels in place (matched by stream URL) so channel IDs stay stable.
+    // Favorites and viewing history reference channels with ON DELETE CASCADE,
+    // so a delete-and-reinsert would wipe them on every refresh.
     let conn = db.conn.lock().unwrap();
     conn.execute_batch("PRAGMA synchronous = OFF").map_err(|e| e.to_string())?;
     conn.execute_batch("BEGIN").map_err(|e| e.to_string())?;
 
-    // Delete old channels
-    conn.execute("DELETE FROM channels WHERE playlist_id = ?1", params![id])
-        .map_err(|e| { let _ = conn.execute_batch("ROLLBACK"); e.to_string() })?;
+    let rollback = |e: rusqlite::Error| { let _ = conn.execute_batch("ROLLBACK"); e.to_string() };
+    let mut summary = SyncSummary { playlist_id: id, added_live: 0, added_vod: 0, added_series: 0, updated: 0, removed: 0 };
 
-    // Batch insert new channels
+    let mut existing: HashMap<String, i64> = {
+        let mut stmt = conn
+            .prepare("SELECT stream_url, id FROM channels WHERE playlist_id = ?1")
+            .map_err(rollback)?;
+        let rows = stmt
+            .query_map(params![id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))
+            .map_err(rollback)?;
+        rows.collect::<Result<_, _>>().map_err(rollback)?
+    };
+
     {
-        let mut stmt = conn.prepare_cached(
-            "INSERT INTO channels (playlist_id, name, group_name, stream_url, logo_url, epg_id, content_type, added_on_server)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"
-        ).map_err(|e| { let _ = conn.execute_batch("ROLLBACK"); e.to_string() })?;
+        let mut update = conn.prepare_cached(
+            "UPDATE channels SET name = ?2, group_name = ?3, logo_url = ?4, epg_id = ?5, content_type = ?6,
+                    added_on_server = ?7, rating = ?8, year = ?9, genre = ?10
+             WHERE id = ?1"
+        ).map_err(rollback)?;
+        let mut insert = conn.prepare_cached(
+            "INSERT INTO channels (playlist_id, name, group_name, stream_url, logo_url, epg_id, content_type, added_on_server, rating, year, genre)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"
+        ).map_err(rollback)?;
 
-        for (i, (name, group, url, logo, epg, ctype, added)) in channels.iter().enumerate() {
-            stmt.execute(params![id, name, group, url, logo, epg, ctype, added])
-                .map_err(|e| { let _ = conn.execute_batch("ROLLBACK"); e.to_string() })?;
+        for (i, ch) in channels.iter().enumerate() {
+            match existing.get(&ch.stream_url) {
+                Some(_) => summary.updated += 1,
+                None => match ch.content_type.as_str() {
+                    "vod" => summary.added_vod += 1,
+                    "series" => summary.added_series += 1,
+                    _ => summary.added_live += 1,
+                },
+            }
+            match existing.remove(&ch.stream_url) {
+                Some(channel_id) => update.execute(params![
+                    channel_id, ch.name, ch.group, ch.logo_url, ch.epg_id, ch.content_type,
+                    ch.added_on_server, ch.rating, ch.year, ch.genre,
+                ]),
+                None => insert.execute(params![
+                    id, ch.name, ch.group, ch.stream_url, ch.logo_url, ch.epg_id, ch.content_type,
+                    ch.added_on_server, ch.rating, ch.year, ch.genre,
+                ]),
+            }
+            .map_err(rollback)?;
 
             if (i + 1) % 2000 == 0 || i + 1 == total {
                 let _ = app.emit("xtream-import-progress", ImportProgress {
                     stage: format!("Saving channels... {}/{}", i + 1, total),
                     current: i + 1,
                     total,
+                    phase: Some("save"),
                 });
             }
+        }
+
+        // Whatever is left no longer exists on the server
+        summary.removed = existing.len();
+        let mut delete = conn.prepare_cached("DELETE FROM channels WHERE id = ?1").map_err(rollback)?;
+        for channel_id in existing.values() {
+            delete.execute(params![channel_id]).map_err(rollback)?;
         }
     }
 
@@ -439,7 +509,8 @@ pub async fn refresh_playlist(
     conn.execute_batch("COMMIT").map_err(|e| e.to_string())?;
     conn.execute_batch("PRAGMA synchronous = NORMAL").map_err(|e| e.to_string())?;
 
-    emit("Refresh complete!", total, total);
+    emit("done", "Library updated", total, total);
+    let _ = app.emit("library-sync-summary", summary);
 
     let playlist = conn
         .query_row(

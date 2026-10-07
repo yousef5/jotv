@@ -1,4 +1,4 @@
-use crate::db::models::{Channel, ChannelGroup, ContentTypeCount, DashboardStats};
+use crate::db::models::{Channel, ChannelGroup, ContentTypeCount, DashboardStats, FacetCount, MediaChannel, MediaFacets};
 use crate::db::Database;
 use rusqlite::params;
 use tauri::State;
@@ -11,7 +11,7 @@ use tauri::State;
 /// - Normalize waw (ؤ → و)
 /// - Remove tatweel (ـ)
 /// - Lowercase Latin chars
-fn normalize_text(text: &str) -> String {
+pub(crate) fn normalize_text(text: &str) -> String {
     text.chars()
         .filter(|c| !matches!(*c as u32, 0x064B..=0x065F | 0x0670 | 0x06D6..=0x06ED))
         .map(|c| match c {
@@ -255,6 +255,7 @@ pub async fn get_recently_added(
     playlist_id: i64,
     content_type: String,
     limit: i64,
+    offset: Option<i64>,
     db: State<'_, Database>,
 ) -> Result<Vec<Channel>, String> {
     let conn = db.conn.lock().unwrap();
@@ -263,13 +264,13 @@ pub async fn get_recently_added(
             "SELECT id, playlist_id, name, group_name, stream_url, logo_url, epg_id, content_type, created_at
              FROM channels
              WHERE playlist_id = ?1 AND content_type = ?2 AND added_on_server > 0
-             ORDER BY added_on_server DESC
-             LIMIT ?3",
+             ORDER BY added_on_server DESC, id DESC
+             LIMIT ?3 OFFSET ?4",
         )
         .map_err(|e| e.to_string())?;
 
     let rows = stmt
-        .query_map(params![playlist_id, content_type, limit], |row| {
+        .query_map(params![playlist_id, content_type, limit, offset.unwrap_or(0)], |row| {
             Ok(Channel {
                 id: row.get(0)?,
                 playlist_id: row.get(1)?,
@@ -479,4 +480,161 @@ pub async fn get_dashboard_stats(db: State<'_, Database>) -> Result<DashboardSta
         total_playlists,
         total_downloads,
     })
+}
+
+/// Get a single channel by id.
+#[tauri::command]
+pub async fn get_channel(id: i64, db: State<'_, Database>) -> Result<Channel, String> {
+    let conn = db.conn.lock().unwrap();
+    conn.query_row(
+        "SELECT id, playlist_id, name, group_name, stream_url, logo_url, epg_id, content_type, created_at
+         FROM channels WHERE id = ?1",
+        params![id],
+        |row| {
+            Ok(Channel {
+                id: row.get(0)?,
+                playlist_id: row.get(1)?,
+                name: row.get(2)?,
+                group_name: row.get(3)?,
+                stream_url: row.get(4)?,
+                logo_url: row.get(5)?,
+                epg_id: row.get(6)?,
+                content_type: row.get(7)?,
+                created_at: row.get(8)?,
+            })
+        },
+    )
+    .map_err(|e| format!("Channel not found: {}", e))
+}
+
+/// Movies or series with sorting and filters, for the browse page.
+/// `group` = None means the whole library of that type.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn browse_media(
+    playlist_id: i64,
+    content_type: String,
+    group: Option<String>,
+    sort: String,
+    year: Option<i64>,
+    genre: Option<String>,
+    min_rating: Option<f64>,
+    limit: i64,
+    offset: i64,
+    db: State<'_, Database>,
+) -> Result<Vec<MediaChannel>, String> {
+    let order = match sort.as_str() {
+        "rating" => "rating IS NULL, rating DESC, added_on_server DESC",
+        "year" => "year IS NULL, year DESC, added_on_server DESC",
+        "name" => "name COLLATE NOCASE",
+        _ => "added_on_server DESC, id DESC",
+    };
+    let sql = format!(
+        "SELECT id, playlist_id, name, group_name, stream_url, logo_url, epg_id, content_type, created_at,
+                rating, year, genre
+         FROM channels
+         WHERE playlist_id = ?1 AND content_type = ?2
+           AND (?3 IS NULL OR group_name = ?3)
+           AND (?4 IS NULL OR year = ?4)
+           AND (?5 IS NULL OR genre LIKE '%' || ?5 || '%')
+           AND (?6 IS NULL OR rating >= ?6)
+         ORDER BY {order}
+         LIMIT ?7 OFFSET ?8"
+    );
+    let conn = db.conn.lock().unwrap();
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(
+            params![playlist_id, content_type, group, year, genre, min_rating, limit, offset],
+            |row| {
+                Ok(MediaChannel {
+                    channel: Channel {
+                        id: row.get(0)?,
+                        playlist_id: row.get(1)?,
+                        name: row.get(2)?,
+                        group_name: row.get(3)?,
+                        stream_url: row.get(4)?,
+                        logo_url: row.get(5)?,
+                        epg_id: row.get(6)?,
+                        content_type: row.get(7)?,
+                        created_at: row.get(8)?,
+                    },
+                    rating: row.get(9)?,
+                    year: row.get(10)?,
+                    genre: row.get(11)?,
+                })
+            },
+        )
+        .map_err(|e| e.to_string())?;
+    rows.collect::<Result<_, _>>().map_err(|e| e.to_string())
+}
+
+/// Years and genres present in a playlist's movies or series (optionally one group).
+#[tauri::command]
+pub async fn get_media_facets(
+    playlist_id: i64,
+    content_type: String,
+    group: Option<String>,
+    db: State<'_, Database>,
+) -> Result<MediaFacets, String> {
+    let conn = db.conn.lock().unwrap();
+
+    let mut years = Vec::new();
+    {
+        let mut stmt = conn
+            .prepare(
+                "SELECT year, COUNT(*) FROM channels
+                 WHERE playlist_id = ?1 AND content_type = ?2 AND (?3 IS NULL OR group_name = ?3) AND year IS NOT NULL
+                 GROUP BY year ORDER BY year DESC",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![playlist_id, content_type, group], |r| {
+                Ok(FacetCount { value: r.get::<_, i64>(0)?, count: r.get(1)? })
+            })
+            .map_err(|e| e.to_string())?;
+        for row in rows {
+            years.push(row.map_err(|e| e.to_string())?);
+        }
+    }
+
+    // Genres come as "Comedy / Crime / Drama" or "Action, Drama"; count each one
+    let mut genre_counts: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
+    {
+        let mut stmt = conn
+            .prepare(
+                "SELECT genre FROM channels
+                 WHERE playlist_id = ?1 AND content_type = ?2 AND (?3 IS NULL OR group_name = ?3) AND genre IS NOT NULL",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![playlist_id, content_type, group], |r| r.get::<_, String>(0))
+            .map_err(|e| e.to_string())?;
+        for row in rows {
+            let genre = row.map_err(|e| e.to_string())?;
+            for part in genre.split(['/', ',', '|']) {
+                let name = part.trim();
+                if name.len() > 1 {
+                    *genre_counts.entry(name.to_string()).or_insert(0) += 1;
+                }
+            }
+        }
+    }
+    let mut genres: Vec<FacetCount<String>> = genre_counts
+        .into_iter()
+        .filter(|(_, n)| *n >= 3)
+        .map(|(value, count)| FacetCount { value, count })
+        .collect();
+    genres.sort_by(|a, b| b.count.cmp(&a.count));
+
+    let rated: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM channels
+             WHERE playlist_id = ?1 AND content_type = ?2 AND (?3 IS NULL OR group_name = ?3) AND rating IS NOT NULL",
+            params![playlist_id, content_type, group],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+
+    Ok(MediaFacets { years, genres, rated })
 }

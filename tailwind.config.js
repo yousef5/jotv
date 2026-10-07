@@ -5,10 +5,10 @@ export default {
   theme: {
     extend: {
       colors: {
-        base: '#1a1a2e',
-        sidebar: '#16213e',
-        card: '#0f3460',
-        accent: '#e94560',
+        base: '#141313',
+        sidebar: '#0e0d0d',
+        card: '#232020',
+        accent: '#e50914',
         'accent-green': '#4ecca3',
         'accent-yellow': '#f0a500',
         'accent-purple': '#7b68ee',
