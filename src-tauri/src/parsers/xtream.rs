@@ -98,7 +98,7 @@ pub struct XtreamSeriesItem {
     pub release_date: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct XtreamSeriesInfo {
     #[serde(default)]
     pub name: Option<String>,
@@ -118,6 +118,98 @@ pub struct XtreamSeriesInfo {
     pub rating: Option<serde_json::Value>,
     #[serde(default)]
     pub backdrop_path: Option<serde_json::Value>,
+    #[serde(default)]
+    pub youtube_trailer: Option<String>,
+    /// When the series last changed on the server (new episodes), unix seconds
+    #[serde(default, deserialize_with = "lenient_i64")]
+    pub last_modified: Option<i64>,
+    #[serde(default, deserialize_with = "lenient_i64")]
+    pub tmdb_id: Option<i64>,
+    #[serde(default, deserialize_with = "lenient_i64", skip_serializing)]
+    pub tmdb: Option<i64>,
+    /// TMDB id read from the provider's image names; a guess, so check the title before using it
+    #[serde(skip_deserializing)]
+    pub tmdb_hint: Option<i64>,
+}
+
+/// Number sent as a number, a numeric string, or "" / null.
+fn lenient_i64<'de, D>(deserializer: D) -> Result<Option<i64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(as_i64(&serde_json::Value::deserialize(deserializer)?))
+}
+
+fn as_i64(v: &serde_json::Value) -> Option<i64> {
+    match v {
+        serde_json::Value::Number(n) => n.as_i64().or_else(|| n.as_f64().map(|f| f as i64)),
+        serde_json::Value::String(s) => s.trim().parse().ok(),
+        _ => None,
+    }
+    .filter(|n| *n > 0)
+}
+
+/// What a file contains, from the server's ffprobe data (`video`, `audio`, `bitrate`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct MediaQuality {
+    pub width: Option<i64>,
+    pub height: Option<i64>,
+    pub video_codec: Option<String>,
+    pub hdr: bool,
+    pub audio_codec: Option<String>,
+    pub audio_channels: Option<i64>,
+    /// ISO 639-2 code ("eng", "ara")
+    pub audio_language: Option<String>,
+    /// kbit/s
+    pub bitrate: Option<i64>,
+}
+
+fn media_quality(info: &serde_json::Map<String, serde_json::Value>) -> Option<MediaQuality> {
+    let video = info.get("video").and_then(|v| v.as_object());
+    let audio = info.get("audio").and_then(|v| v.as_object());
+    let text = |m: Option<&serde_json::Map<String, serde_json::Value>>, key: &str| {
+        m.and_then(|m| m.get(key))
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim().to_lowercase())
+            .filter(|s| !s.is_empty())
+    };
+    let num = |m: Option<&serde_json::Map<String, serde_json::Value>>, key: &str| m.and_then(|m| m.get(key)).and_then(as_i64);
+
+    let q = MediaQuality {
+        width: num(video, "width"),
+        height: num(video, "height"),
+        video_codec: text(video, "codec_name"),
+        // PQ (HDR10 / Dolby Vision) and HLG transfer curves
+        hdr: matches!(text(video, "color_transfer").as_deref(), Some("smpte2084" | "arib-std-b67")),
+        audio_codec: text(audio, "codec_name"),
+        audio_channels: num(audio, "channels"),
+        audio_language: text(audio.and_then(|a| a.get("tags")).and_then(|t| t.as_object()), "language")
+            .filter(|l| l != "und"),
+        bitrate: info.get("bitrate").and_then(as_i64),
+    };
+    (q != MediaQuality::default()).then_some(q)
+}
+
+/// The provider names TMDB artwork "<tmdb id>_tv_backdrop_<n>.jpg".
+fn tmdb_id_from_images(backdrops: Option<&serde_json::Value>) -> Option<i64> {
+    let urls: Vec<&str> = match backdrops? {
+        serde_json::Value::Array(a) => a.iter().filter_map(|v| v.as_str()).collect(),
+        serde_json::Value::String(s) => vec![s.as_str()],
+        _ => return None,
+    };
+    urls.iter().find_map(|u| {
+        let file = u.rsplit('/').next()?;
+        let (id, rest) = file.split_once('_')?;
+        rest.starts_with("tv_backdrop").then(|| id.parse().ok()).flatten()
+    })
+}
+
+fn has_url(v: &serde_json::Value) -> bool {
+    match v {
+        serde_json::Value::String(s) => !s.trim().is_empty(),
+        serde_json::Value::Array(a) => a.iter().any(has_url),
+        _ => false,
+    }
 }
 
 /// VOD movie info from Xtream get_vod_info API.
@@ -136,6 +228,8 @@ pub struct XtreamVodInfo {
     pub duration: Option<String>,
     pub duration_secs: Option<i64>,
     pub youtube_trailer: Option<String>,
+    pub tmdb_id: Option<i64>,
+    pub quality: Option<MediaQuality>,
 }
 
 /// Helper to extract an optional string from a JSON object, trying multiple keys.
@@ -164,10 +258,17 @@ impl XtreamVodInfo {
             genre: json_str(m, &["genre"]),
             release_date: json_str(m, &["releasedate", "releaseDate", "release_date"]),
             rating: m.get("rating").cloned(),
-            backdrop_path: m.get("backdrop_path").cloned(),
+            // Some servers leave backdrop_path empty and send a single "backdrop"
+            backdrop_path: m
+                .get("backdrop_path")
+                .filter(|v| has_url(v))
+                .cloned()
+                .or_else(|| json_str(m, &["backdrop"]).map(|b| serde_json::json!([b]))),
             duration: json_str(m, &["duration"]),
-            duration_secs: m.get("duration_secs").and_then(|v| v.as_i64()),
+            duration_secs: m.get("duration_secs").and_then(as_i64),
             youtube_trailer: json_str(m, &["youtube_trailer"]),
+            tmdb_id: ["tmdb_id", "tmdb"].iter().find_map(|k| m.get(*k).and_then(as_i64)),
+            quality: media_quality(m),
         }
     }
 }
@@ -192,6 +293,8 @@ pub struct XtreamEpisode {
     pub season: serde_json::Value,
     #[serde(default)]
     pub direct_source: Option<String>,
+    #[serde(default, deserialize_with = "lenient_i64")]
+    pub added: Option<i64>,
     /// Object with movie_image / plot / duration_secs, or `[]` on some servers
     #[serde(default)]
     pub info: serde_json::Value,
@@ -241,6 +344,9 @@ pub struct EpisodeDetail {
     pub image: Option<String>,
     pub plot: Option<String>,
     pub duration_secs: Option<i64>,
+    /// When the episode was added to the server, unix seconds
+    pub added: Option<i64>,
+    pub quality: Option<MediaQuality>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -406,17 +512,21 @@ pub async fn fetch_series_info(
         return Err("Server returned empty response".to_string());
     }
 
-    let raw: XtreamSeriesInfoRaw = serde_json::from_slice(&body)
+    parse_series_info(&body, creds)
+}
+
+fn parse_series_info(body: &[u8], creds: &XtreamCredentials) -> Result<SeriesDetail, String> {
+    let raw: XtreamSeriesInfoRaw = serde_json::from_slice(body)
         .map_err(|e| {
             let preview = String::from_utf8_lossy(&body[..body.len().min(300)]);
             format!("JSON parse error: {} — Response: {}", e, preview)
         })?;
 
-    let info = raw.info.unwrap_or(XtreamSeriesInfo {
-        name: None, cover: None, plot: None, cast: None,
-        director: None, genre: None, release_date: None,
-        rating: None, backdrop_path: None,
-    });
+    let mut info = raw.info.unwrap_or_default();
+    info.tmdb_id = info.tmdb_id.or(info.tmdb);
+    if info.tmdb_id.is_none() {
+        info.tmdb_hint = tmdb_id_from_images(info.backdrop_path.as_ref());
+    }
 
     let mut seasons: Vec<SeasonDetail> = Vec::new();
     if let Some(episodes_val) = raw.episodes {
@@ -451,9 +561,9 @@ pub async fn fetch_series_info(
                                 container_extension: ext.to_string(),
                                 image: text("movie_image").filter(|s| s.starts_with("http")),
                                 plot: text("plot"),
-                                duration_secs: info
-                                    .and_then(|m| m.get("duration_secs"))
-                                    .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok()))),
+                                duration_secs: info.and_then(|m| m.get("duration_secs")).and_then(as_i64),
+                                added: ep.added,
+                                quality: info.and_then(media_quality),
                             }
                         }).collect();
 
@@ -499,9 +609,13 @@ pub async fn fetch_vod_info(
         return Err("Server returned empty response".to_string());
     }
 
+    parse_vod_info(&body)
+}
+
+fn parse_vod_info(body: &[u8]) -> Result<VodDetail, String> {
     // Parse as raw Value to handle duplicate keys (common in Xtream APIs).
     // serde_json::Value silently takes the last value for duplicate keys.
-    let raw: serde_json::Value = serde_json::from_slice(&body)
+    let raw: serde_json::Value = serde_json::from_slice(body)
         .map_err(|e| {
             let preview = String::from_utf8_lossy(&body[..body.len().min(300)]);
             format!("JSON parse error: {} — Response: {}", e, preview)
@@ -697,6 +811,65 @@ mod tests {
             username: "user1".to_string(),
             password: "pass1".to_string(),
         }
+    }
+
+    #[test]
+    fn vod_info_reads_tmdb_id_and_quality() {
+        let d = parse_vod_info(include_bytes!("fixtures/vod_info.json")).unwrap();
+        assert_eq!(d.info.tmdb_id, Some(1380417));
+        assert_eq!(d.info.duration_secs, Some(6392));
+        assert_eq!(d.info.youtube_trailer.as_deref(), Some("7a3mjy9BXec"));
+        assert_eq!(
+            d.info.quality,
+            Some(MediaQuality {
+                width: Some(1920),
+                height: Some(800),
+                video_codec: Some("h264".into()),
+                hdr: false,
+                audio_codec: Some("aac".into()),
+                audio_channels: Some(2),
+                audio_language: Some("eng".into()),
+                bitrate: Some(4965),
+            })
+        );
+    }
+
+    #[test]
+    fn vod_info_falls_back_to_backdrop_key() {
+        let d = parse_vod_info(br#"{"info": {"backdrop_path": [], "backdrop": "https://x/b.jpg"}}"#).unwrap();
+        assert_eq!(d.info.backdrop_path, Some(serde_json::json!(["https://x/b.jpg"])));
+        let d = parse_vod_info(br#"{"info": {"backdrop_path": ["https://x/a.jpg"], "backdrop": "https://x/b.jpg"}}"#).unwrap();
+        assert_eq!(d.info.backdrop_path, Some(serde_json::json!(["https://x/a.jpg"])));
+    }
+
+    #[test]
+    fn series_info_reads_trailer_dates_and_episode_quality() {
+        let d = parse_series_info(include_bytes!("fixtures/series_info.json"), &test_creds()).unwrap();
+        assert_eq!(d.info.youtube_trailer.as_deref(), Some("yz4KP9Nza5g"));
+        assert_eq!(d.info.last_modified, Some(1792413623));
+        // The provider names its TMDB images after the TMDB id
+        assert_eq!(d.info.tmdb_id, None);
+        assert_eq!(d.info.tmdb_hint, Some(211288));
+        assert_eq!(d.seasons.len(), 2);
+        let e = &d.seasons[0].episodes[0];
+        assert_eq!(e.added, Some(1707762495));
+        assert_eq!(e.duration_secs, Some(2615));
+        let q = e.quality.as_ref().unwrap();
+        assert_eq!((q.width, q.height, q.bitrate), (Some(1920), Some(1080), Some(1600)));
+    }
+
+    #[test]
+    fn media_quality_detects_hdr_and_lenient_numbers() {
+        let info = serde_json::json!({
+            "video": {"codec_name": "hevc", "width": "3840", "height": 2160, "color_transfer": "smpte2084"},
+            "audio": {"codec_name": "eac3", "channels": 6, "tags": {"language": "und"}},
+            "bitrate": "18000"
+        });
+        let q = media_quality(info.as_object().unwrap()).unwrap();
+        assert!(q.hdr);
+        assert_eq!((q.width, q.height, q.audio_channels, q.bitrate), (Some(3840), Some(2160), Some(6), Some(18000)));
+        assert_eq!(q.audio_language, None);
+        assert_eq!(media_quality(serde_json::json!({"video": [], "audio": []}).as_object().unwrap()), None);
     }
 
     #[test]

@@ -203,3 +203,67 @@ pub async fn get_recommendations(
 
     Ok(results)
 }
+
+/// A series you watched or saved that changed on the server since then (usually new episodes).
+#[derive(Debug, serde::Serialize)]
+pub struct SeriesUpdate {
+    #[serde(flatten)]
+    pub channel: Channel,
+    /// When the series last changed on the server, unix seconds
+    pub updated_at: i64,
+}
+
+/// Followed series (watched, in progress or in My list) updated in the last `days` days,
+/// newest first, skipping ones you've opened since the update.
+#[tauri::command]
+pub async fn get_series_updates(
+    days: Option<i64>,
+    limit: Option<i64>,
+    db: State<'_, Database>,
+) -> Result<Vec<SeriesUpdate>, String> {
+    let since = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+        - days.unwrap_or(30) * 86400;
+    let conn = db.conn.lock().unwrap();
+    let mut stmt = conn
+        .prepare(
+            "WITH seen AS (
+                 SELECT channel_id, CAST(strftime('%s', MAX(started_at)) AS INTEGER) AS at
+                 FROM viewing_history GROUP BY channel_id
+                 UNION ALL
+                 SELECT channel_id, CAST(strftime('%s', added_at) AS INTEGER) FROM favorites
+                 UNION ALL
+                 SELECT CAST(substr(key, 17) AS INTEGER), 0 FROM settings WHERE key LIKE 'series\\_progress\\_%' ESCAPE '\\'
+             )
+             SELECT c.id, c.playlist_id, c.name, c.group_name, c.stream_url, c.logo_url, c.epg_id, c.content_type,
+                    c.created_at, c.added_on_server
+             FROM channels c JOIN seen s ON s.channel_id = c.id
+             WHERE c.content_type = 'series' AND c.added_on_server >= ?1
+             GROUP BY c.id
+             HAVING c.added_on_server > MAX(COALESCE(s.at, 0))
+             ORDER BY c.added_on_server DESC
+             LIMIT ?2",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(params![since, limit.unwrap_or(20)], |row| {
+            Ok(SeriesUpdate {
+                channel: Channel {
+                    id: row.get(0)?,
+                    playlist_id: row.get(1)?,
+                    name: row.get(2)?,
+                    group_name: row.get(3)?,
+                    stream_url: row.get(4)?,
+                    logo_url: row.get(5)?,
+                    epg_id: row.get(6)?,
+                    content_type: row.get(7)?,
+                    created_at: row.get(8)?,
+                },
+                updated_at: row.get(9)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    rows.collect::<Result<_, _>>().map_err(|e| e.to_string())
+}

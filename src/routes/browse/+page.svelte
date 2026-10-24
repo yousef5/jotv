@@ -790,8 +790,9 @@
     gap: 4px;
     padding: 3px 7px;
     border-radius: 4px;
-    background: oklch(0.12 0.004 25 / 0.82);
-    backdrop-filter: blur(6px);
+    /* No backdrop-filter: WebKitGTK repaints the whole page behind every one,
+       and a grid full of them freezes the app */
+    background: oklch(0.12 0.004 25 / 0.88);
     color: var(--color-text);
     font-size: 0.75rem;
     font-weight: 800;

@@ -837,3 +837,54 @@ pub async fn clear_social_downloads(db: State<'_, Database>) -> Result<(), Strin
         .map_err(|e| e.to_string())?;
     Ok(())
 }
+
+/// Direct stream address(es) for an online video (e.g. a YouTube trailer), so
+/// MPV can play it in the app without its own youtube-dl hook (kept off: it
+/// would route every IPTV channel through yt-dlp first).
+#[derive(Debug, Clone, Serialize)]
+pub struct ResolvedVideo {
+    pub title: String,
+    pub video: String,
+    /// Separate audio stream when the best video has none (YouTube above 360p)
+    pub audio: Option<String>,
+    pub duration: Option<f64>,
+}
+
+#[tauri::command]
+pub async fn resolve_video(url: String) -> Result<ResolvedVideo, String> {
+    let bin = find_ytdlp().await?;
+    let output = Command::new(&bin)
+        .args([
+            "-j",
+            "--no-playlist",
+            "--no-warnings",
+            // Up to 1080p, plain HTTPS (not HLS/DASH manifests), skip AV1 for
+            // hardware decoding; else the best single file
+            "-f",
+            "bv*[height<=1080][protocol^=http][vcodec!^=av01]+ba[protocol^=http]/b[protocol^=http]/b",
+            &url,
+        ])
+        .output()
+        .await
+        .map_err(|e| format!("Failed to run yt-dlp: {}", e))?;
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        return Err(err.lines().last().unwrap_or("yt-dlp failed").trim().to_string());
+    }
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).map_err(|e| format!("Bad yt-dlp output: {}", e))?;
+    let title = json.get("title").and_then(|t| t.as_str()).unwrap_or("Video").to_string();
+    let duration = json.get("duration").and_then(|d| d.as_f64());
+    let url_of = |v: &serde_json::Value| v.get("url").and_then(|u| u.as_str()).map(String::from);
+
+    if let Some(parts) = json.get("requested_formats").and_then(|f| f.as_array()) {
+        let has_video = |f: &&serde_json::Value| f.get("vcodec").and_then(|c| c.as_str()).is_some_and(|c| c != "none");
+        let video = parts.iter().find(has_video).and_then(url_of);
+        let audio = parts.iter().find(|f| !has_video(f)).and_then(url_of);
+        if let Some(video) = video {
+            return Ok(ResolvedVideo { title, video, audio, duration });
+        }
+    }
+    let video = url_of(&json).ok_or("No playable stream found")?;
+    Ok(ResolvedVideo { title, video, audio: None, duration })
+}

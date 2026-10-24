@@ -22,10 +22,11 @@
   import { playlists, loadPlaylists, pendingOpen } from '$lib/stores/playlists';
   import TrackPanel from '$lib/components/TrackPanel.svelte';
   import { accounts, loadAccount, connectionsFull } from '$lib/stores/account';
-  import { streamGuard, reloadStream, setStable } from '$lib/stores/streamGuard';
+  import { streamGuard, reloadStream, setStable, flash } from '$lib/stores/streamGuard';
+  import { SYNC_STEP_MS, syncLabel } from '$lib/audioSync';
   import {
     nowPlaying, liveStatus, liveError, liveMode, liveFullscreen, videoAnchor, liveBehind, liveVolume, liveMuted,
-    BEHIND_LIMIT, playLive, stopLive, setLiveMode, goLive, setVolume, changeVolume, toggleMute,
+    BEHIND_LIMIT, playLive, stopLive, setLiveMode, goLive, setVolume, changeVolume, toggleMute, shiftAudio,
   } from '$lib/stores/live';
 
   const PAGE = 150;
@@ -429,6 +430,9 @@
       showKeys = !showKeys;
     } else if (!inSearch && e.key === 'c' && liveNow) {
       showTracks = !showTracks;
+    } else if (!inSearch && (e.key === '[' || e.key === ']') && liveNow) {
+      // Sound ahead of the picture on this channel? ] plays it later
+      flash(syncLabel(shiftAudio(e.key === ']' ? SYNC_STEP_MS : -SYNC_STEP_MS)));
     } else if (!inSearch && liveNow) {
       if (e.key === ' ') { e.preventDefault(); mpvPause().catch(() => {}); }
       else if (e.key === 'f') fullscreen();
@@ -746,6 +750,7 @@
               <div><dt>T</dt><dd>Theater</dd></div>
               <div><dt>F</dt><dd>Fullscreen</dd></div>
               <div><dt>C</dt><dd>Audio & subtitles</dd></div>
+              <div><dt>[ ]</dt><dd>Sound earlier / later</dd></div>
               <div><dt>Ctrl K</dt><dd>Search</dd></div>
             </dl>
           {/if}

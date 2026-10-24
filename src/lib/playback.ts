@@ -69,6 +69,14 @@ export function backdropUrl(backdropPath: unknown, cover: unknown): string | nul
   return hiResImage(b);
 }
 
+/** Every backdrop the server lists (series often have several), poster repeats left out. */
+export function backdropUrls(backdropPath: unknown, cover: unknown): string[] {
+  const list = Array.isArray(backdropPath) ? backdropPath : [backdropPath];
+  const poster = firstUrl(cover);
+  const urls = list.map(firstUrl).filter((u): u is string => !!u && u !== poster).map(hiResImage);
+  return [...new Set(urls)];
+}
+
 /** True when a loaded image is a real wide backdrop that stays sharp at full screen. */
 export function isWideBackdrop(img: HTMLImageElement): boolean {
   return img.naturalWidth >= 960 && img.naturalWidth / img.naturalHeight >= 1.3;

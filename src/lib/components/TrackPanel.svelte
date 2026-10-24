@@ -2,7 +2,8 @@
   import { onMount } from 'svelte';
   import { mpvTracks } from '$lib/tauri';
   import type { MpvTrack } from '$lib/tauri';
-  import { nowPlaying, setTrack } from '$lib/stores/live';
+  import { nowPlaying, setTrack, audioSync, shiftAudio } from '$lib/stores/live';
+  import { SYNC_STEP_MS, syncLabel } from '$lib/audioSync';
 
   // Audio and subtitle choice for what's playing. Lives below the player
   // (never over it: the video is a native surface that would cover it).
@@ -103,6 +104,22 @@
       {/each}
     </section>
   {/if}
+
+  {#if $nowPlaying}
+    <section>
+      <h4>Audio sync</h4>
+      <div class="sync">
+        <button class="step" onclick={() => shiftAudio(-SYNC_STEP_MS)} aria-label="Play the sound earlier">−</button>
+        <span class="sync-value" class:moved={$audioSync !== 0} aria-live="polite">{syncLabel($audioSync)}</span>
+        <button class="step" onclick={() => shiftAudio(SYNC_STEP_MS)} aria-label="Play the sound later">+</button>
+      </div>
+      <p class="hint">
+        Sound ahead of the picture? Press <b>+</b>.
+        Saved for this {$nowPlaying.kind === 'live' ? 'channel' : 'title'}.
+        {#if $audioSync}<button class="reset" onclick={() => shiftAudio(null)}>Reset</button>{/if}
+      </p>
+    </section>
+  {/if}
 </div>
 
 <style>
@@ -148,4 +165,41 @@
   .opt-text { display: flex; flex-direction: column; min-width: 0; }
   .opt-text b { font-size: 0.875rem; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .opt-text small { font-size: 0.75rem; color: var(--color-text-muted); }
+
+  .sync { display: flex; align-items: center; gap: 8px; padding: 4px 6px; }
+  .step {
+    flex-shrink: 0;
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    background: oklch(1 0 0 / 0.08);
+    color: var(--color-text);
+    font-size: 1.125rem;
+    font-weight: 700;
+    line-height: 1;
+    transition: background 120ms var(--ease-out);
+  }
+  .step:hover { background: oklch(1 0 0 / 0.16); }
+  .step:focus-visible { outline: 2px solid var(--color-text); outline-offset: 2px; }
+  .sync-value {
+    flex: 1;
+    min-width: 0;
+    text-align: center;
+    font-size: 0.875rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: var(--color-text-muted);
+  }
+  .sync-value.moved { color: var(--color-text); }
+  .hint { padding: 4px 10px 0; font-size: 0.75rem; line-height: 1.5; color: var(--color-text-muted); }
+  .hint b { color: var(--color-text); }
+  .reset {
+    margin-left: 4px;
+    padding: 0;
+    background: none;
+    color: var(--color-accent-soft);
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-decoration: underline;
+  }
 </style>

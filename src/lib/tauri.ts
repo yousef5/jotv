@@ -139,6 +139,20 @@ export function getXtreamAccountInfo(
   return invoke<XtreamAccountInfo>('get_xtream_account_info', { server, username, password });
 }
 
+/** What a file contains, from the server's ffprobe data */
+export interface MediaQuality {
+  width: number | null;
+  height: number | null;
+  video_codec: string | null;
+  hdr: boolean;
+  audio_codec: string | null;
+  audio_channels: number | null;
+  /** ISO 639-2 ("eng", "ara") */
+  audio_language: string | null;
+  /** kbit/s */
+  bitrate: number | null;
+}
+
 export interface SeriesInfo {
   name: string | null;
   cover: string | null;
@@ -149,6 +163,12 @@ export interface SeriesInfo {
   release_date: string | null;
   rating: unknown;
   backdrop_path: unknown;
+  youtube_trailer: string | null;
+  /** Last change on the server (new episodes), unix seconds */
+  last_modified: number | null;
+  tmdb_id: number | null;
+  /** TMDB id guessed from the provider's image names; checked against the title */
+  tmdb_hint: number | null;
 }
 
 export interface EpisodeDetail {
@@ -160,6 +180,9 @@ export interface EpisodeDetail {
   image: string | null;
   plot: string | null;
   duration_secs: number | null;
+  /** When the episode reached the server, unix seconds */
+  added: number | null;
+  quality: MediaQuality | null;
 }
 
 export interface SeasonDetail {
@@ -185,6 +208,8 @@ export interface VodInfo {
   duration: string | null;
   duration_secs: number | null;
   youtube_trailer: string | null;
+  tmdb_id: number | null;
+  quality: MediaQuality | null;
 }
 
 export interface VodDetail {
@@ -538,6 +563,19 @@ export function getSocialDownloads(): Promise<SocialDownloadRecord[]> {
   return invoke<SocialDownloadRecord[]>('get_social_downloads');
 }
 
+export interface ResolvedVideo {
+  title: string;
+  video: string;
+  /** Separate audio stream (YouTube above 360p) */
+  audio: string | null;
+  duration: number | null;
+}
+
+/** Direct stream addresses for an online video, via yt-dlp */
+export function resolveVideo(url: string): Promise<ResolvedVideo> {
+  return invoke<ResolvedVideo>('resolve_video', { url });
+}
+
 export function clearSocialDownloads(): Promise<void> {
   return invoke<void>('clear_social_downloads');
 }
@@ -630,6 +668,16 @@ export function getRecommendations(limit?: number): Promise<Channel[]> {
   return invoke<Channel[]>('get_recommendations', { limit: limit ?? null });
 }
 
+export interface SeriesUpdate extends Channel {
+  /** When the series last changed on the server, unix seconds */
+  updated_at: number;
+}
+
+/** Series you watched or saved that got updated since (usually new episodes), newest first. */
+export function getSeriesUpdates(days = 30, limit = 20): Promise<SeriesUpdate[]> {
+  return invoke<SeriesUpdate[]>('get_series_updates', { days, limit });
+}
+
 // ─── Player Commands ─────────────────────────────────────────────────────────
 
 // ─── MPV Player Commands ────────────────────────────────────────────────────
@@ -647,6 +695,10 @@ export interface MpvOptions {
   alang?: string;
   /** Preferred subtitle language(s), or "no" for subtitles off */
   slang?: string;
+  /** Separate audio stream for this file only (YouTube trailers) */
+  audio?: string;
+  /** Audio sync for this file, seconds (positive = sound later) */
+  audioDelay?: number;
 }
 
 function mpvArgs(url: string, title: string, o: MpvOptions) {
@@ -660,6 +712,8 @@ function mpvArgs(url: string, title: string, o: MpvOptions) {
     start: o.start ?? null,
     alang: o.alang ?? null,
     slang: o.slang ?? null,
+    audio: o.audio ?? null,
+    audioDelay: o.audioDelay ?? null,
   };
 }
 
@@ -669,6 +723,11 @@ export function mpvPlay(url: string, title: string, opts: MpvOptions = {}): Prom
 
 export function mpvLoad(url: string, title: string, opts: MpvOptions = {}): Promise<void> {
   return invoke<void>('mpv_load', mpvArgs(url, title, opts));
+}
+
+/** Shift the sound against the picture while playing (seconds; positive = sound later). */
+export function mpvAudioDelay(seconds: number): Promise<void> {
+  return invoke<void>('mpv_audio_delay', { seconds });
 }
 
 /** Seek by `seconds`, or to `seconds` when `absolute`. */
@@ -730,7 +789,7 @@ export type MpvPlaybackState = 'live' | 'buffering' | 'nosignal' | 'paused' | 'o
 export interface MpvStatus {
   state: MpvPlaybackState;
   cache_seconds: number;
-  /** Seconds downloaded but not yet shown: how far playback trails the live edge */
+  /** How far playback trails live, beyond the ~30s cushion MPV keeps on purpose (0 = live) */
   behind_seconds: number;
   volume: number;
   muted: boolean;
@@ -826,6 +885,8 @@ export interface TmdbPerson {
 export interface TmdbDetails {
   tmdb_id: number;
   backdrop: string | null;
+  /** Up to six text-free backdrops, best first (empty for older cached lookups) */
+  backdrops: string[];
   /** Transparent title treatment */
   logo: string | null;
   poster: string | null;
@@ -836,9 +897,35 @@ export interface TmdbDetails {
   cast: TmdbPerson[];
 }
 
-/** Null when no TMDB key is set or nothing matched. */
-export function tmdbDetails(kind: 'vod' | 'series', title: string, year: number | null): Promise<TmdbDetails | null> {
-  return invoke<TmdbDetails | null>('tmdb_details', { kind, title, year });
+/**
+ * Null when no TMDB key is set or nothing matched. `ids.tmdbId` comes from the
+ * provider and skips the title search; `ids.tmdbHint` is used only if its title matches.
+ */
+export function tmdbDetails(
+  kind: 'vod' | 'series',
+  title: string,
+  year: number | null,
+  ids: { tmdbId?: number | null; tmdbHint?: number | null } = {},
+): Promise<TmdbDetails | null> {
+  return invoke<TmdbDetails | null>('tmdb_details', {
+    kind, title, year, tmdbId: ids.tmdbId ?? null, tmdbHint: ids.tmdbHint ?? null,
+  });
+}
+
+export interface TmdbEpisode {
+  episode: number;
+  name: string | null;
+  overview: string | null;
+  /** Frame from the episode */
+  still: string | null;
+  air_date: string | null;
+  /** Minutes */
+  runtime: number | null;
+}
+
+/** Episode names, stills and summaries for one TMDB season; empty without a key. */
+export function tmdbSeason(tvId: number, season: number): Promise<TmdbEpisode[]> {
+  return invoke<TmdbEpisode[]>('tmdb_season', { tvId, season });
 }
 
 export function tmdbCheckKey(key: string): Promise<boolean> {

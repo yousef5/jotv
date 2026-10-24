@@ -1,11 +1,12 @@
 import { writable, get } from 'svelte/store';
 import {
-  mpvPlay, mpvLoad, mpvStop, mpvIsRunning, mpvStatus, mpvGoLive, mpvVolume, mpvToggleMute, mpvSeek, mpvSetTrack,
+  mpvPlay, mpvLoad, mpvStop, mpvIsRunning, mpvStatus, mpvGoLive, mpvVolume, mpvToggleMute, mpvSeek, mpvSetTrack, mpvAudioDelay,
   recordViewing,
   embedAttach, embedPlace, getSetting, setSetting,
 } from '$lib/tauri';
 import type { Channel, MpvPlaybackState, MpvTrack } from '$lib/tauri';
 import { guardTick, guardReset, flash } from './streamGuard';
+import { syncKey, nudge } from '$lib/audioSync';
 
 // Live TV, movies and episodes all play in MPV, either rendered inside the app
 // window (`--wid`) or in MPV's own window. Playback outlives any one page.
@@ -28,6 +29,8 @@ export interface NowPlaying {
   startedAt: number;
   /** true when MPV renders inside the app window */
   embedded: boolean;
+  /** Separate audio stream (YouTube trailers) */
+  audioUrl?: string | null;
 }
 
 /** A movie or episode to play in the app */
@@ -39,6 +42,8 @@ export interface MediaItem {
   poster?: string | null;
   progressKey: string;
   href: string;
+  /** Separate audio stream (YouTube trailers) */
+  audioUrl?: string | null;
 }
 
 const MODE_KEY = 'jotv.liveMode';
@@ -95,7 +100,7 @@ function savedMode(): LiveMode {
 export const nowPlaying = writable<NowPlaying | null>(null);
 export const liveStatus = writable<MpvPlaybackState | 'starting' | ''>('');
 export const liveError = writable('');
-/** Seconds playback trails the live edge (0 when at it) */
+/** Seconds playback trails live, beyond the cushion MPV keeps on purpose (0 = live) */
 export const liveBehind = writable(0);
 /** Behind by more than this counts as "not live" (matches the MPV badge) */
 export const BEHIND_LIMIT = 10;
@@ -208,7 +213,46 @@ export async function resumePosition(progressKey: string): Promise<{ pos: number
   return { pos, duration };
 }
 
+/** Audio sync of what's playing, ms (positive = sound later) */
+export const audioSync = writable(0);
+
+function savedSync(key: string): number {
+  try {
+    return parseInt(localStorage.getItem(key) ?? '') || 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** Moves the sound against the picture (null = back in sync), remembered for this channel or file. */
+export function shiftAudio(deltaMs: number | null): number {
+  const np = get(nowPlaying);
+  if (!np) return 0;
+  const ms = deltaMs === null ? 0 : nudge(get(audioSync), deltaMs);
+  audioSync.set(ms);
+  try {
+    if (ms) localStorage.setItem(syncKey(np), String(ms));
+    else localStorage.removeItem(syncKey(np));
+  } catch {}
+  mpvAudioDelay(ms / 1000).catch(() => {});
+  return ms;
+}
+
+/** What start() is opening right now, so a second click doesn't open it again */
+let opening: string | null = null;
+
 async function start(np: Omit<NowPlaying, 'startedAt' | 'embedded'>, startAt?: number): Promise<void> {
+  const key = `${np.kind}:${np.url}`;
+  if (opening === key) return;
+  opening = key;
+  try {
+    await launch(np, startAt);
+  } finally {
+    if (opening === key) opening = null;
+  }
+}
+
+async function launch(np: Omit<NowPlaying, 'startedAt' | 'embedded'>, startAt?: number): Promise<void> {
   logViewing();
 
   let wid: number | undefined;
@@ -229,6 +273,9 @@ async function start(np: Omit<NowPlaying, 'startedAt' | 'embedded'>, startAt?: n
     liveError.set('');
     await waitForSurface();
   }
+  // Each channel or file opens with its own remembered audio sync (0 by default)
+  const syncMs = savedSync(syncKey(np));
+  audioSync.set(syncMs);
   // Saved volume/mute apply when MPV starts; a running MPV keeps its own
   const opts = {
     wid,
@@ -238,6 +285,8 @@ async function start(np: Omit<NowPlaying, 'startedAt' | 'embedded'>, startAt?: n
     start: startAt,
     alang: readPref(ALANG_KEY),
     slang: readPref(SLANG_KEY),
+    audio: np.audioUrl ?? undefined,
+    audioDelay: syncMs / 1000,
   };
   try {
     // A running MPV in the same mode just switches URL: instant channel change
@@ -253,6 +302,12 @@ async function start(np: Omit<NowPlaying, 'startedAt' | 'embedded'>, startAt?: n
 }
 
 export function playLive(channel: Channel): Promise<void> {
+  // Picking the channel that's already on (a double click, Enter on its row) must
+  // not reconnect: each reconnect is a new connection, and most accounts allow one
+  const np = get(nowPlaying);
+  if (np?.kind === 'live' && np.channel.id === channel.id && ['live', 'buffering', 'starting'].includes(get(liveStatus))) {
+    return Promise.resolve();
+  }
   return start({
     channel,
     kind: 'live',

@@ -11,6 +11,8 @@ export interface WatchItem {
   progressKey: string;
   season?: string;
   episode?: string;
+  /** Separate audio stream (YouTube trailers) */
+  audioUrl?: string | null;
 }
 
 /** What the title page hands to /watch, so it doesn't refetch series info */
@@ -20,6 +22,8 @@ export interface WatchRequest {
   items: WatchItem[];
   index: number;
   fromStart?: boolean;
+  /** A trailer, not the title itself: no resume, back to the title page when it ends */
+  trailer?: boolean;
 }
 
 export const pendingWatch = writable<WatchRequest | null>(null);

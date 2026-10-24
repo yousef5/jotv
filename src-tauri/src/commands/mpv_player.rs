@@ -63,7 +63,7 @@ impl Drop for MpvState {
 pub struct MpvStatus {
     pub state: String,
     pub cache_seconds: f64,
-    /// Seconds downloaded but not yet shown: how far playback trails the live edge
+    /// How far playback trails live, beyond the cushion kept on purpose (0 = live)
     pub behind_seconds: f64,
     pub volume: f64,
     pub muted: bool,
@@ -95,8 +95,8 @@ fn connect_ipc(path: &str) -> std::io::Result<std::fs::File> {
 }
 
 fn send_mpv_command(socket_path: &str, command: &[&str]) -> Result<String, String> {
-    let args: Vec<String> = command.iter().map(|s| format!("\"{}\"", s)).collect();
-    let json = format!("{{ \"command\": [{}] }}\n", args.join(", "));
+    // Proper JSON: titles and URLs can contain quotes and backslashes
+    let json = format!("{}\n", serde_json::json!({ "command": command }));
 
     let mut stream = connect_ipc(socket_path).map_err(|e| format!("Cannot connect to MPV: {}", e))?;
 
@@ -122,8 +122,25 @@ fn get_mpv_property(socket_path: &str, name: &str) -> Option<serde_json::Value> 
 
 /// MPV script that draws a YouTube-style "● LIVE" badge on the video. It lives
 /// inside MPV because overlays created over IPC vanish when the connection closes.
+/// Seconds of video kept between playback and the newest download on live channels.
+/// Live HLS starts 3 segments back and "Go live" keeps this much, so a segment the
+/// server delivers late drains the cushion instead of freezing the picture.
+/// (Sitting on the newest segment left ≤10s of buffer and stalled every few
+/// segments on beIN channels, measured 2026-10-19.)
+const LIVE_CUSHION_SECS: f64 = 30.0;
+
+/// How far playback trails live, not counting the cushion kept on purpose.
+fn behind_live(newest: f64, pos: Option<f64>) -> f64 {
+    match pos {
+        Some(pos) if newest > 0.0 => (newest - pos - LIVE_CUSHION_SECS).max(0.0),
+        _ => 0.0,
+    }
+}
+
 const LIVE_BADGE_LUA: &str = r#"
 local BEHIND_LIMIT = 10
+-- Seconds kept between playback and the newest download (absorbs late segments); set by the app
+local CUSHION = tonumber(mp.get_opt("jotv-cushion")) or 30
 local LIVE = mp.get_opt("jotv-live") ~= "no"
 local badge = mp.create_osd_overlay("ass-events")
 local vol = mp.create_osd_overlay("ass-events")
@@ -145,17 +162,17 @@ local function res_x()
   return math.floor(720 * ow / oh), 720 / oh
 end
 
--- Newest downloaded moment minus what's on screen = how far behind live we are
+-- Newest downloaded moment minus what's on screen, less the cushion = how far behind live we are
 local function behind()
   local edge, pos = mp.get_property_number("demuxer-cache-time"), mp.get_property_number("time-pos")
   if not edge or not pos then return 0 end
-  return math.max(0, math.floor(edge - pos))
+  return math.max(0, math.floor(edge - pos - CUSHION))
 end
 
--- Jump to the newest part already downloaded (no new request to the server)
+-- Catch up using what's already downloaded (no new request to the server), keeping the cushion
 local function go_live()
-  local edge = mp.get_property_number("demuxer-cache-time")
-  if edge then mp.commandv("seek", tostring(edge - 2), "absolute") end
+  local edge, pos = mp.get_property_number("demuxer-cache-time"), mp.get_property_number("time-pos")
+  if edge and pos and edge - CUSHION > pos then mp.commandv("seek", tostring(edge - CUSHION), "absolute") end
 end
 
 local function draw()
@@ -168,7 +185,7 @@ local function draw()
   local playing = not mp.get_property_bool("core-idle", true)
   local caching = mp.get_property_bool("paused-for-cache", false)
 
-  -- Servers often burst old video on connect; start at the live edge instead
+  -- Servers often burst old video on connect; catch up (to the cushion) instead
   if playing and not caching and not jumped and started_at and mp.get_time() - started_at < 20 and lag > BEHIND_LIMIT then
     jumped = true
     go_live()
@@ -295,6 +312,8 @@ pub async fn mpv_play(
     start: Option<f64>,
     alang: Option<String>,
     slang: Option<String>,
+    audio: Option<String>,
+    audio_delay: Option<f64>,
     mpv: State<'_, MpvState>,
 ) -> Result<(), String> {
     let socket = mpv.socket_path.lock().unwrap().clone();
@@ -359,9 +378,13 @@ pub async fn mpv_play(
     if muted == Some(true) {
         cmd.arg("--mute=yes");
     }
+    if let Some(d) = audio_delay.filter(|d| *d != 0.0) {
+        cmd.arg(format!("--audio-delay={:.3}", d.clamp(-MAX_AUDIO_DELAY, MAX_AUDIO_DELAY)));
+    }
     cmd.arg(format!(
-        "--script-opts=jotv-live={}{}",
+        "--script-opts=jotv-live={},jotv-cushion={}{}",
         if live { "yes" } else { "no" },
+        LIVE_CUSHION_SECS,
         if !live && wid.is_some() { ",osc-visibility=never" } else { "" },
     ));
     if let Some(secs) = start.filter(|s| *s > 0.0) {
@@ -382,17 +405,23 @@ pub async fn mpv_play(
         // Wayland output, ignore --wid and open its own window.
         cmd.env_remove("WAYLAND_DISPLAY");
     }
+    // A separate audio stream (YouTube trailers) belongs to this file only:
+    // `--{ … --}` scopes it so the next channel doesn't inherit it
+    match audio.as_deref().filter(|a| !a.is_empty()) {
+        Some(a) => cmd.args(["--{".to_string(), format!("--audio-file={}", a), stream_url.clone(), "--}".to_string()]),
+        None => cmd.arg(&stream_url),
+    };
     let child = cmd
         .args([
-            &stream_url,
             &format!("--input-ipc-server={}", socket),
             &format!("--title=JoTV - {}", title),
 
             // ═══ CORE: raw stream, no youtube-dl ═══
             "--ytdl=no",
             "--hls-bitrate=max",
-            // Start HLS at the newest segment (default is 3 back: ~20-30s behind live)
-            "--demuxer-lavf-o-append=live_start_index=-1",
+            // Start HLS 3 segments back from the newest (ffmpeg's default): the
+            // segments already listed become the cushion, see LIVE_CUSHION_SECS
+            "--demuxer-lavf-o-append=live_start_index=-3",
 
             // ═══ CACHE: enough to survive jitter, not so much it desyncs ═══
             // 5-min cache caused initial-load lag and made stream-end/seek behave
@@ -479,6 +508,8 @@ pub async fn mpv_load(
     start: Option<f64>,
     alang: Option<String>,
     slang: Option<String>,
+    audio: Option<String>,
+    audio_delay: Option<f64>,
     mpv: State<'_, MpvState>,
 ) -> Result<(), String> {
     let socket = mpv.socket_path.lock().unwrap().clone();
@@ -495,21 +526,34 @@ pub async fn mpv_load(
 
     // Switching in-app/window or live/movie mode needs a fresh MPV
     if !alive || *mpv.wid.lock().unwrap() != wid || *mpv.live.lock().unwrap() != live.unwrap_or(true) {
-        return mpv_play(app, url, title, wid, volume, muted, live, start, alang, slang, mpv).await;
+        return mpv_play(app, url, title, wid, volume, muted, live, start, alang, slang, audio, audio_delay, mpv).await;
     }
 
-    // Use .ts for direct server connection (avoids CDN issues)
-    let stream_url = if url.contains(".m3u8") {
-        url.replace(".m3u8", ".ts")
-    } else {
-        url.clone()
-    };
+    // The URL exactly as stored, like mpv_play. Rewriting .m3u8 to .ts here made
+    // every channel switch play the raw TS stream, which this provider sends at
+    // barely real-time speed: no cushion builds and every dip froze the picture.
+    // HLS segments arrive from their CDN at full line speed. (The stream guard
+    // still tries the other container if a channel fails.)
+    let stream_url = url.clone();
 
-    // Per-file start position (resume) rides along with loadfile
-    let start_opt = start.filter(|s| *s > 0.0).map(|s| format!("start={:.1}", s));
-    let load: Vec<&str> = match &start_opt {
-        Some(opt) => vec!["loadfile", &stream_url, "replace", "-1", opt],
-        None => vec!["loadfile", &stream_url, "replace"],
+    // Per-file options ride along with loadfile: start position (resume) and a
+    // separate audio stream. `%len%` quoting keeps commas in URLs intact.
+    let mut opts: Vec<String> = Vec::new();
+    if let Some(s) = start.filter(|s| *s > 0.0) {
+        opts.push(format!("start={:.1}", s));
+    }
+    if let Some(a) = audio.as_deref().filter(|a| !a.is_empty()) {
+        opts.push(format!("audio-file=%{}%{}", a.len(), a));
+    }
+    // Sent even when 0: the previous file's value would otherwise carry over
+    if let Some(d) = audio_delay {
+        opts.push(format!("audio-delay={:.3}", d.clamp(-MAX_AUDIO_DELAY, MAX_AUDIO_DELAY)));
+    }
+    let opts = opts.join(",");
+    let load: Vec<&str> = if opts.is_empty() {
+        vec!["loadfile", &stream_url, "replace"]
+    } else {
+        vec!["loadfile", &stream_url, "replace", "-1", &opts]
     };
 
     // Try IPC — if it fails, MPV is stuck/orphaned, restart it
@@ -520,7 +564,7 @@ pub async fn mpv_load(
         }
         Err(_) => {
             // IPC failed — kill and restart
-            mpv_play(app, url, title, wid, volume, muted, live, start, alang, slang, mpv).await
+            mpv_play(app, url, title, wid, volume, muted, live, start, alang, slang, audio, audio_delay, mpv).await
         }
     }
 }
@@ -641,12 +685,8 @@ pub async fn mpv_status(mpv: State<'_, MpvState>) -> Result<MpvStatus, String> {
         "live"
     };
 
-    // Newest downloaded moment minus play position
     let time_pos = get_mpv_property(&socket, "time-pos").and_then(|v| v.as_f64());
-    let behind_seconds = match time_pos {
-        Some(pos) if cache_seconds > 0.0 => (cache_seconds - pos).max(0.0),
-        _ => 0.0,
-    };
+    let behind_seconds = behind_live(cache_seconds, time_pos);
 
     let volume = get_mpv_property(&socket, "volume").and_then(|v| v.as_f64()).unwrap_or(100.0);
     let muted = get_mpv_property(&socket, "mute").and_then(|v| v.as_bool()).unwrap_or(false);
@@ -834,13 +874,22 @@ pub async fn mpv_set_track(
     Ok(())
 }
 
-/// Reconnects to `url` as given (no .m3u8→.ts rewrite), at the live edge.
+/// Reconnects to `url` as given (no .m3u8→.ts rewrite), keeping the live cushion.
 /// Used by the app's stream recovery.
 #[tauri::command]
 pub async fn mpv_reconnect(url: String, mpv: State<'_, MpvState>) -> Result<(), String> {
     let socket = mpv.socket_path.lock().unwrap().clone();
-    send_mpv_command(&socket, &["loadfile", &url, "replace"])?;
+    let delay = get_mpv_property(&socket, "audio-delay").and_then(|v| v.as_f64());
+    let args = reload_args(&url, delay);
+    send_mpv_command(&socket, &args.iter().map(String::as_str).collect::<Vec<_>>())?;
     Ok(())
+}
+
+/// Reload command that keeps the channel's audio sync: it's a per-file option,
+/// so a plain reload would drop it back to 0.
+fn reload_args(url: &str, audio_delay: Option<f64>) -> Vec<String> {
+    let delay = audio_delay.unwrap_or(0.0).clamp(-MAX_AUDIO_DELAY, MAX_AUDIO_DELAY);
+    vec!["loadfile".into(), url.into(), "replace".into(), "-1".into(), format!("audio-delay={:.3}", delay)]
 }
 
 /// Live buffering: "stable" waits for a bigger buffer before resuming after a
@@ -857,10 +906,55 @@ pub async fn mpv_set_buffer(mode: String, mpv: State<'_, MpvState>) -> Result<()
     Ok(())
 }
 
+/// Largest audio sync shift, in seconds either way.
+const MAX_AUDIO_DELAY: f64 = 5.0;
+
+/// Shifts the sound against the picture while playing (seconds; positive = sound
+/// later). For channels whose source has the sound ahead of or behind the video.
+#[tauri::command]
+pub async fn mpv_audio_delay(seconds: f64, mpv: State<'_, MpvState>) -> Result<(), String> {
+    let socket = mpv.socket_path.lock().unwrap().clone();
+    let value = format!("{:.3}", seconds.clamp(-MAX_AUDIO_DELAY, MAX_AUDIO_DELAY));
+    send_mpv_command(&socket, &["set", "audio-delay", &value])?;
+    Ok(())
+}
+
 /// Shows "RECONNECTING" on the video while the app recovers the stream.
 #[tauri::command]
 pub async fn mpv_badge_reconnecting(on: bool, mpv: State<'_, MpvState>) -> Result<(), String> {
     let socket = mpv.socket_path.lock().unwrap().clone();
     send_mpv_command(&socket, &["script-message", "jotv-reconnecting", if on { "yes" } else { "no" }])?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn behind_live_does_not_count_the_cushion() {
+        // A full cushion ahead is what "live" looks like now
+        assert_eq!(behind_live(130.0, Some(100.0)), 0.0);
+        assert_eq!(behind_live(112.0, Some(100.0)), 0.0);
+        // Paused or rewound: behind by whatever exceeds the cushion
+        assert_eq!(behind_live(150.0, Some(100.0)), 20.0);
+        assert_eq!(behind_live(0.0, Some(100.0)), 0.0);
+        assert_eq!(behind_live(130.0, None), 0.0);
+    }
+
+    #[test]
+    fn reconnect_keeps_the_audio_sync() {
+        assert_eq!(
+            reload_args("http://h/live/u/p/1.m3u8", Some(0.25)),
+            vec!["loadfile", "http://h/live/u/p/1.m3u8", "replace", "-1", "audio-delay=0.250"]
+        );
+        assert_eq!(reload_args("http://h/1.m3u8", None)[4], "audio-delay=0.000");
+        assert_eq!(reload_args("http://h/1.m3u8", Some(9.0))[4], "audio-delay=5.000");
+    }
+
+    #[test]
+    fn badge_script_reads_the_cushion() {
+        assert!(LIVE_BADGE_LUA.contains(r#"mp.get_opt("jotv-cushion")"#));
+        assert_eq!(format!("jotv-cushion={}", LIVE_CUSHION_SECS), "jotv-cushion=30");
+    }
 }

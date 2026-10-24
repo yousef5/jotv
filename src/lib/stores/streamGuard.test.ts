@@ -67,6 +67,18 @@ describe('stream guard', () => {
     expect(mpvReconnect).not.toHaveBeenCalled();
   });
 
+  it('gives a slow channel time to open before calling it dropped', async () => {
+    // A busy server can take 10s+ to answer; reconnecting then only adds a
+    // second connection on a one-connection account
+    await run('nosignal', 15_000);
+    expect(mpvReconnect).not.toHaveBeenCalled();
+  });
+
+  it('still recovers a channel that never opens', async () => {
+    await run('nosignal', 21_000);
+    expect(mpvReconnect).toHaveBeenCalledTimes(1);
+  });
+
   it('does not treat a paused stream as broken', async () => {
     await run('live', 25_000);
     await run('paused', 60_000);

@@ -1,7 +1,8 @@
 <script lang="ts" module>
-  import type { DashboardStats, ContentTypeCount, Channel, FavoriteChannel } from '$lib/tauri';
+  import type { DashboardStats, ContentTypeCount, Channel, FavoriteChannel, SeriesUpdate } from '$lib/tauri';
 
   interface GroupRow { title: string; items: Channel[] }
+  interface GenreRow { title: string; genre: string; pid: number; items: Channel[] }
 
   interface HomeData {
     stats: DashboardStats | null;
@@ -10,6 +11,8 @@
     newVod: Channel[];
     newSeries: Channel[];
     groupRows: GroupRow[];
+    genreRows: GenreRow[];
+    seriesUpdates: SeriesUpdate[];
     topRated: Channel[];
     favorites: FavoriteChannel[];
     heroIndex: number;
@@ -48,7 +51,9 @@
   import {
     getDashboardStats, getContentTypeCounts, getRecentlyWatched,
     getFavorites, getRecentlyAdded, getChannelsByGroup, getVodInfo, getSeriesInfo, browseMedia, tmdbDetails,
+    getSeriesUpdates, getMediaFacets,
   } from '$lib/tauri';
+  import { agoLabel } from '$lib/mediaInfo';
   import type { Playlist } from '$lib/tauri';
   import { playlists, loadPlaylists, pendingOpen, RECENTLY_ADDED_GROUP } from '$lib/stores/playlists';
   import type { PendingOpen } from '$lib/stores/playlists';
@@ -61,6 +66,8 @@
 
   const FEATURED_COUNT = 5;
   const HERO_SECONDS = 9;
+  // Too broad to make an interesting row
+  const BROAD_GENRES = ['drama', 'kids', 'family', 'tv movie'];
 
   const cached = homeCache;
 
@@ -74,6 +81,8 @@
   let newVod = $state<Channel[]>(cached?.newVod ?? []);
   let newSeries = $state<Channel[]>(cached?.newSeries ?? []);
   let groupRows = $state<GroupRow[]>(cached?.groupRows ?? []);
+  let genreRows = $state<GenreRow[]>(cached?.genreRows ?? []);
+  let seriesUpdates = $state<SeriesUpdate[]>(cached?.seriesUpdates ?? []);
   let topRated = $state<Channel[]>(cached?.topRated ?? []);
   let favorites = $state<FavoriteChannel[]>(cached?.favorites ?? []);
 
@@ -101,7 +110,7 @@
     loadContent();
     return () => {
       homeCache = $state.snapshot({
-        stats, countsMap, recentChannels, newVod, newSeries, groupRows, topRated, favorites, heroIndex,
+        stats, countsMap, recentChannels, newVod, newSeries, groupRows, genreRows, seriesUpdates, topRated, favorites, heroIndex,
       }) as HomeData;
     };
   });
@@ -132,6 +141,7 @@
     getDashboardStats().then((s) => (stats = s)).catch(() => {});
     getRecentlyWatched(16).then((r) => (recentChannels = r)).catch(() => {});
     getFavorites().then((f) => (favorites = f)).catch(() => {});
+    getSeriesUpdates(30, 20).then((u) => (seriesUpdates = u)).catch(() => {});
     for (const p of list) loadPlaylistDetails(p);
 
     let vod: Channel[] = [];
@@ -158,6 +168,7 @@
       })),
     );
     groupRows = rows.filter((r) => r.items.length >= 4);
+    if (seriesPid) genreRows = await loadGenreRows(seriesPid);
 
     // Best-rated movies released this year (ratings come from the provider's list)
     if (vodPid) {
@@ -171,6 +182,28 @@
     const counts = new Map<string, number>();
     for (const c of items) if (c.group_name) counts.set(c.group_name, (counts.get(c.group_name) ?? 0) + 1);
     return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, n).map(([g]) => g);
+  }
+
+  /** Two top-rated series rows by genre; which genres changes every day */
+  async function loadGenreRows(pid: number): Promise<GenreRow[]> {
+    const facets = await getMediaFacets(pid, 'series', null).catch(() => null);
+    // Latin names only, to match the English interface
+    const genres = (facets?.genres ?? [])
+      .map((g) => g.value)
+      .filter((g) => /^[A-Za-z&' -]+$/.test(g) && !BROAD_GENRES.includes(g.toLowerCase()))
+      .slice(0, 10);
+    if (!genres.length) return [];
+    const day = Math.floor(Date.now() / 86_400_000);
+    const picks = [...new Set([genres[day % genres.length], genres[(day + 3) % genres.length]])];
+    const rows = await Promise.all(
+      picks.map(async (genre) => ({
+        title: `${genre} series`,
+        genre,
+        pid,
+        items: await browseMedia(pid, 'series', { genre, sort: 'rating', minRating: 7 }, 30).catch(() => [] as Channel[]),
+      })),
+    );
+    return rows.filter((r) => r.items.length >= 4);
   }
 
   async function loadPlaylistDetails(p: Playlist) {
@@ -207,9 +240,12 @@
         rating: toRating(raw.rating),
         runtime: formatRuntime(durationSecs),
       };
-      // TMDB (optional): sharper backdrop and the title logo
-      const year = splitTitle(ch.name).year;
-      const t = await tmdbDetails(ch.content_type as 'vod' | 'series', searchTitle(ch.name), year ? +year : null).catch(() => null);
+      // TMDB (optional): sharper backdrop and the title logo. The provider's ids pin the exact title.
+      const year = splitTitle(ch.name).year ?? info.year;
+      const t = await tmdbDetails(ch.content_type as 'vod' | 'series', searchTitle(ch.name), year ? +year : null, {
+        tmdbId: raw.tmdb_id,
+        tmdbHint: 'tmdb_hint' in raw ? raw.tmdb_hint : null,
+      }).catch(() => null);
       if (t) {
         info.backdrop = t.backdrop ?? info.backdrop;
         info.logo = t.logo;
@@ -472,6 +508,14 @@
         />
       {/if}
 
+      {#if seriesUpdates.length}
+        <MediaRow
+          title="New episodes for you"
+          items={seriesUpdates.map((u) => ({ ...toItem(u, `Updated ${agoLabel(u.updated_at)}`), badge: 'New episodes' }))}
+          onselect={(i) => open(seriesUpdates[i])}
+        />
+      {/if}
+
       {#if newVod.length}
         <MediaRow
           title="New movies"
@@ -515,6 +559,15 @@
           items={row.items.map((c) => toItem(c))}
           onselect={(i) => open(row.items[i])}
           onviewall={() => browse(row.items[0], row.title)}
+        />
+      {/each}
+
+      {#each genreRows as row (row.title)}
+        <MediaRow
+          title={row.title}
+          items={row.items.map((c) => toItem(c))}
+          onselect={(i) => open(row.items[i])}
+          onviewall={() => goto(`/browse?${new URLSearchParams({ pid: String(row.pid), type: 'series', genre: row.genre, sort: 'rating' })}`)}
         />
       {/each}
 

@@ -55,9 +55,16 @@
     return () => videoAnchor.set(null);
   });
 
-  // Next episode countdown when one ends
+  // Next episode countdown when one ends; a finished trailer goes back to its title
   $effect(() => {
     if (mine && $playbackPos.eof && next && countdown === null) startCountdown();
+  });
+  let trailerDone = false;
+  $effect(() => {
+    if (req?.trailer && mine && $playbackPos.eof && !trailerDone) {
+      trailerDone = true;
+      stopLive().then(back);
+    }
   });
 
   onMount(() => {
@@ -77,12 +84,14 @@
   async function init() {
     const id = parseInt($page.url.searchParams.get('id') ?? '');
     const ep = parseInt($page.url.searchParams.get('ep') ?? '');
+    const wantTrailer = $page.url.searchParams.has('trailer');
     if (isNaN(id)) { error = 'Nothing to play.'; return; }
 
     const pending = get(pendingWatch);
     pendingWatch.set(null);
     let r: WatchRequest | null = pending?.channel.id === id ? pending : null;
-    if (!r && lastRequest?.channel.id === id) {
+    // The last request only counts if it's the same kind (a trailer isn't the movie)
+    if (!r && lastRequest?.channel.id === id && !!lastRequest.trailer === wantTrailer) {
       const i = isNaN(ep) ? lastRequest.index : lastRequest.items.findIndex((x) => x.id === ep);
       if (i >= 0) r = { ...lastRequest, index: i };
     }
@@ -149,7 +158,8 @@
         url: item.url,
         poster: req.poster,
         progressKey: item.progressKey,
-        href: watchHref(req.channel.id, item, isSeries),
+        href: req.trailer ? `/watch?id=${req.channel.id}&trailer=1` : watchHref(req.channel.id, item, isSeries),
+        audioUrl: item.audioUrl,
       },
       { fromStart },
     );

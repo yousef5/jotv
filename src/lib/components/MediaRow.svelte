@@ -5,6 +5,8 @@
     subtitle?: string;
     image: string | null;
     live?: boolean;
+    /** Short note on the artwork ("New episodes") */
+    badge?: string;
   }
 
   // Horizontal position per row title, so rows stay where you left them
@@ -107,6 +109,8 @@
 
             {#if item.live}
               <span class="live-pill"><i></i>Live</span>
+            {:else if item.badge}
+              <span class="badge-pill">{item.badge}</span>
             {/if}
 
             <div class="hover-info">
@@ -281,6 +285,21 @@
     line-clamp: 4;
     -webkit-box-orient: vertical;
     overflow: hidden;
+  }
+
+  .badge-pill {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    padding: 3px 7px;
+    border-radius: 3px;
+    background: var(--color-accent);
+    color: var(--color-on-accent);
+    font-size: 0.625rem;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    box-shadow: 0 2px 8px oklch(0 0 0 / 0.5);
   }
 
   .live-pill {

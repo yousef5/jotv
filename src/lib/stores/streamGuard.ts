@@ -232,10 +232,13 @@ export function guardTick(status: MpvStatus, live: { id: number; url: string }) 
     bufferingSince = null;
   }
 
-  // Dropped: nothing decoding and nothing loading
+  // Dropped: nothing decoding and nothing loading. While a channel is still
+  // opening, a busy server can take a while to answer: reconnecting then would
+  // only open a second connection, which one-connection accounts refuse.
   if (state === 'nosignal' || state === 'offline') {
     dropSince ??= now;
-    if (now - dropSince > DROP_MS) return recover('The stream dropped', now);
+    const limit = now - startedAt < 20_000 ? START_STALL_MS : DROP_MS;
+    if (now - dropSince > limit) return recover('The stream dropped', now);
   } else {
     dropSince = null;
   }

@@ -1,20 +1,21 @@
 <script lang="ts">
   import { askFavoriteCategory } from '$lib/components/FavoriteSaved.svelte';
-  import { onDestroy } from 'svelte';
+  import { onDestroy, tick, untrack } from 'svelte';
   import { fade } from 'svelte/transition';
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
   import {
     getChannel, getVodInfo, getSeriesInfo, getChannelsByGroup, isFavorite, toggleFavorite, tmdbDetails,
-    startDownload, getSetting,
+    startDownload, getSetting, resolveVideo, tmdbSeason,
   } from '$lib/tauri';
-  import type { Channel, Playlist, SeasonDetail, EpisodeDetail, TmdbDetails } from '$lib/tauri';
+  import type { Channel, Playlist, SeasonDetail, EpisodeDetail, TmdbDetails, TmdbEpisode, MediaQuality } from '$lib/tauri';
   import { playlists, loadPlaylists, pendingOpen } from '$lib/stores/playlists';
   import { downloads } from '$lib/stores/downloads';
   import {
     playExternal, extFromUrl, splitTitle, firstUrl, toRating, formatRuntime, remoteIdFromUrl,
-    backdropUrl, isWideBackdrop, searchTitle,
+    backdropUrls, isWideBackdrop, searchTitle,
   } from '$lib/playback';
+  import { qualityTags, qualityDetails, youtubeKey, agoLabel, isRecent, episodeName, latestEpisode } from '$lib/mediaInfo';
   import { pendingWatch, watchHref } from '$lib/stores/watch';
   import type { WatchItem } from '$lib/stores/watch';
   import { resumePosition } from '$lib/stores/live';
@@ -23,7 +24,7 @@
   export const snapshot = mainScrollSnapshot;
 
   interface Meta {
-    backdrop: string | null;
+    backdrops: string[];
     cover: string | null;
     plot: string | null;
     genres: string[];
@@ -34,7 +35,12 @@
     rating: number | null;
     runtime: string | null;
     trailer: string | null;
+    /** Movies: what the file contains (episodes carry their own) */
+    quality: MediaQuality | null;
   }
+
+  /** What TMDB needs to find this exact title */
+  interface TmdbIds { tmdbId: number | null; tmdbHint: number | null; year: number | null }
 
   let ch = $state<Channel | null>(null);
   let meta = $state<Meta | null>(null);
@@ -46,7 +52,6 @@
   let metaLoading = $state(false);
   let error = $state('');
   let notice = $state('');
-  let backdropReady = $state(false);
   let resume = $state<{ season: string; episode: string } | null>(null);
 
   /** Movies: where you stopped last time */
@@ -60,12 +65,54 @@
   let episodes = $derived(seasons.find((s) => s.season_number === season)?.episodes ?? []);
   /** Optional TMDB artwork (when the user set a key) */
   let tmdb = $state<TmdbDetails | null>(null);
-  let artwork = $derived(tmdb?.backdrop ?? meta?.backdrop ?? null);
+  /** TMDB episode names and stills, by season number */
+  let tmdbSeasons = $state<Record<string, TmdbEpisode[]>>({});
+
+  // Backdrops: TMDB's, then any the server lists (often just posters). Only images
+  // that load as real wide backdrops are shown; with several they take turns.
+  let slides = $derived(
+    [...new Set([tmdb?.backdrop, ...(tmdb?.backdrops ?? []), ...(meta?.backdrops ?? [])].filter((u): u is string => !!u))],
+  );
+  let wide = $state<Record<string, boolean>>({});
+  let shown = $derived(slides.filter((u) => wide[u]));
+  let slide = $state(0);
+  let currentSlide = $derived(shown.length ? shown[slide % shown.length] : null);
+  let backdropReady = $derived(shown.length > 0);
+  let artwork = $derived(shown[0] ?? slides[0] ?? null);
+  const SLIDE_SECONDS = 9;
+  const reducedMotion = typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches;
   let plot = $derived(meta?.plot ?? tmdb?.overview ?? null);
   let trailer = $derived(meta?.trailer ?? tmdb?.trailer ?? null);
   let rating = $derived(meta?.rating ?? (tmdb?.rating ? Math.round(tmdb.rating * 10) / 10 : null));
   let poster = $derived(meta?.cover || ch?.logo_url || null);
   let vodDownload = $derived(ch && !isSeries ? activeDownload((d) => d.channel_id === ch!.id) : null);
+
+  function onSlideLoad(src: string, img: HTMLImageElement) {
+    wide = { ...wide, [src]: isWideBackdrop(img) };
+  }
+
+  $effect(() => {
+    const n = shown.length;
+    if (n < 2 || reducedMotion) return;
+    const t = setInterval(() => (slide = (slide + 1) % n), SLIDE_SECONDS * 1000);
+    return () => clearInterval(t);
+  });
+
+  // Episode names and stills from TMDB for the season on screen
+  $effect(() => {
+    const tvId = isSeries ? tmdb?.tmdb_id : undefined;
+    const sn = season;
+    if (!tvId || !sn || isNaN(+sn) || untrack(() => sn in tmdbSeasons)) return;
+    const token = loadToken;
+    tmdbSeasons = { ...tmdbSeasons, [sn]: [] };
+    tmdbSeason(tvId, +sn)
+      .then((eps) => token === loadToken && (tmdbSeasons = { ...tmdbSeasons, [sn]: eps }))
+      .catch(() => {});
+  });
+
+  function tmdbEpisode(sn: string, e: EpisodeDetail): TmdbEpisode | undefined {
+    return tmdbSeasons[sn]?.find((t) => t.episode === +e.episode_num);
+  }
 
   let resumeEpisode = $derived.by(() => {
     if (!seasons.length) return null;
@@ -77,6 +124,14 @@
     const first = seasons[0];
     return first.episodes[0] ? { season: first, episode: first.episodes[0], resumed: false } : null;
   });
+
+  // What the header says about the file: the movie, or the episode Play would start
+  let quality = $derived(isSeries ? (resumeEpisode?.episode.quality ?? null) : (meta?.quality ?? null));
+  let qualityChips = $derived(qualityTags(quality));
+  let fileDetails = $derived(qualityDetails(quality));
+  /** Series: the newest episode the server dates, and whether it arrived in the last two weeks */
+  let newest = $derived(latestEpisode(seasons));
+  let freshEpisode = $derived(newest && isRecent(newest.added) ? newest : null);
 
   $effect(() => {
     if (!isNaN(id)) load(id);
@@ -97,7 +152,10 @@
     resume = null;
     error = '';
     loading = true;
-    backdropReady = false;
+    tmdb = null;
+    tmdbSeasons = {};
+    wide = {};
+    slide = 0;
 
     let channel: Channel;
     try {
@@ -120,11 +178,6 @@
     const playlist = $playlists.find((p) => p.id === channel.playlist_id);
 
     isFavorite(channel.id).then((f) => token === loadToken && (favorite = f)).catch(() => {});
-    tmdb = null;
-    const titleYear = splitTitle(channel.name).year;
-    tmdbDetails(channel.content_type as 'vod' | 'series', searchTitle(channel.name), titleYear ? +titleYear : null)
-      .then((d) => token === loadToken && (tmdb = d))
-      .catch(() => {});
     if (channel.content_type === 'vod') {
       resumePosition(`progress_vod_${channel.id}`)
         .then((r) => token === loadToken && r.pos > 0 && (movieResume = r))
@@ -142,30 +195,42 @@
         .catch(() => {});
     }
 
-    if (playlist) await loadMeta(channel, playlist, token);
+    const ids = playlist ? await loadMeta(channel, playlist, token) : null;
+    if (token !== loadToken) return;
+    // With the provider's ids TMDB matches the exact title, not the first search hit
+    const titleYear = splitTitle(channel.name).year;
+    tmdbDetails(channel.content_type as 'vod' | 'series', searchTitle(channel.name), titleYear ? +titleYear : ids?.year ?? null, {
+      tmdbId: ids?.tmdbId,
+      tmdbHint: ids?.tmdbHint,
+    })
+      .then((d) => token === loadToken && (tmdb = d))
+      .catch(() => {});
   }
 
-  async function loadMeta(channel: Channel, p: Playlist, token: number) {
-    if (p.source_type !== 'xtream' || !p.source_url || !p.xtream_username || !p.xtream_password) return;
+  async function loadMeta(channel: Channel, p: Playlist, token: number): Promise<TmdbIds | null> {
+    if (p.source_type !== 'xtream' || !p.source_url || !p.xtream_username || !p.xtream_password) return null;
     const remoteId = remoteIdFromUrl(channel.stream_url);
-    if (remoteId === null) return;
+    if (remoteId === null) return null;
     metaLoading = true;
     try {
       if (channel.content_type === 'series') {
         const d = await getSeriesInfo(p.source_url, p.xtream_username, p.xtream_password, remoteId);
-        if (token !== loadToken) return;
-        meta = toMeta(d.info, null, null);
+        if (token !== loadToken) return null;
+        meta = toMeta(d.info, null, d.info.youtube_trailer, null);
         seasons = d.seasons;
         season = resume?.season && d.seasons.some((s) => s.season_number === resume!.season)
           ? resume.season
           : d.seasons[0]?.season_number ?? null;
+        return { tmdbId: d.info.tmdb_id, tmdbHint: d.info.tmdb_hint, year: meta.year ? +meta.year : null };
       } else {
         const d = await getVodInfo(p.source_url, p.xtream_username, p.xtream_password, remoteId);
-        if (token !== loadToken) return;
-        meta = toMeta(d.info, d.info.duration_secs, d.info.youtube_trailer);
+        if (token !== loadToken) return null;
+        meta = toMeta(d.info, d.info.duration_secs, d.info.youtube_trailer, d.info.quality);
+        return { tmdbId: d.info.tmdb_id, tmdbHint: null, year: meta.year ? +meta.year : null };
       }
     } catch (e) {
       if (token === loadToken) flash(`Couldn't load details: ${e}`);
+      return null;
     } finally {
       if (token === loadToken) metaLoading = false;
     }
@@ -175,9 +240,10 @@
     info: { cover: string | null; plot: string | null; genre: string | null; cast: string | null; director: string | null; release_date: string | null; rating: unknown; backdrop_path: unknown },
     durationSecs: number | null,
     trailer: string | null,
+    quality: MediaQuality | null,
   ): Meta {
     return {
-      backdrop: backdropUrl(info.backdrop_path, info.cover),
+      backdrops: backdropUrls(info.backdrop_path, info.cover),
       cover: firstUrl(info.cover),
       plot: info.plot?.trim() || null,
       genres: (info.genre ?? '').split(/[,/]/).map((g) => g.trim()).filter(Boolean),
@@ -187,7 +253,8 @@
       year: info.release_date?.slice(0, 4) || null,
       rating: toRating(info.rating),
       runtime: formatRuntime(durationSecs),
-      trailer: trailer?.trim() || null,
+      trailer: youtubeKey(trailer),
+      quality,
     };
   }
 
@@ -242,12 +309,40 @@
     return m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m left` : `${m}m left`;
   }
 
+  let trailerLoading = $state(false);
+
+  // Trailers play in the app's player: yt-dlp finds YouTube's direct streams.
+  // Without yt-dlp (or if YouTube refuses), they open in the browser as before.
   async function playTrailer() {
-    if (!trailer) return;
+    if (!trailer || !ch || trailerLoading) return;
+    const youtube = `https://www.youtube.com/watch?v=${trailer}`;
+    trailerLoading = true;
     try {
-      await playExternal(`https://www.youtube.com/watch?v=${trailer}`, true);
-    } catch (e) {
-      flash(e instanceof Error ? e.message : String(e));
+      const r = await resolveVideo(youtube);
+      pendingWatch.set({
+        channel: ch,
+        poster: artwork ?? poster,
+        index: 0,
+        fromStart: true,
+        trailer: true,
+        items: [{
+          id: ch.id,
+          url: r.video,
+          audioUrl: r.audio,
+          title: names?.title ?? ch.name,
+          subtitle: 'Trailer',
+          progressKey: `progress_trailer_${ch.id}`,
+        }],
+      });
+      goto(`/watch?id=${ch.id}&trailer=1`);
+    } catch {
+      try {
+        await playExternal(youtube, true);
+      } catch (e) {
+        flash(e instanceof Error ? e.message : String(e));
+      }
+    } finally {
+      trailerLoading = false;
     }
   }
 
@@ -299,16 +394,17 @@
     if (e.key === 'Escape' && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement)) back();
   }
 
+  /** Switch to an episode's season and bring it into view */
+  async function showEpisode(sn: string, ep: string) {
+    season = sn;
+    await tick();
+    document.querySelector(`.ep[data-ep="${sn}:${ep}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+
   function episodeLabel(s: SeasonDetail, e: EpisodeDetail): string {
     return `S${s.season_number}:E${e.episode_num}`;
   }
 
-  function episodeTitle(e: EpisodeDetail): string {
-    // Many servers repeat the series name ("Show - S01E03 - Title"); keep the useful tail
-    const parts = e.title.split(/\s+-\s+/);
-    const tail = parts[parts.length - 1]?.trim();
-    return tail && !/^S\d+E\d+$/i.test(tail) && parts.length > 1 ? tail : `Episode ${e.episode_num}`;
-  }
 </script>
 
 <svelte:window onkeydown={onKey} />
@@ -338,11 +434,9 @@
     <section class="hero">
       <div class="hero-media" aria-hidden="true">
         {#if poster}<img class="ambient" src={poster} alt="" />{/if}
-        {#if artwork}
-          {#key artwork}
-            <img class="backdrop" class:ready={backdropReady} src={artwork} alt="" onload={(e) => (backdropReady = isWideBackdrop(e.currentTarget as HTMLImageElement))} />
-          {/key}
-        {/if}
+        {#each slides as src (src)}
+          <img class="backdrop" class:ready={src === currentSlide} {src} alt="" onload={(e) => onSlideLoad(src, e.currentTarget as HTMLImageElement)} />
+        {/each}
         {#if poster && !backdropReady}
           <img class="poster" src={poster} alt="" out:fade={{ duration: 400 }} />
         {/if}
@@ -365,9 +459,17 @@
           {#if isSeries && seasons.length}
             <span>{seasons.length} {seasons.length === 1 ? 'Season' : 'Seasons'}</span>
           {/if}
+          {#each qualityChips as chip (chip)}<span class="badge">{chip}</span>{/each}
           {#if !isSeries}<span class="badge">{extFromUrl(ch.stream_url).toUpperCase()}</span>{/if}
           {#if meta?.genres.length}<span class="genres">{meta.genres.slice(0, 3).join(' · ')}</span>{/if}
         </div>
+
+        {#if freshEpisode}
+          <button class="fresh" in:fade={{ duration: 300 }} onclick={() => showEpisode(freshEpisode!.season, freshEpisode!.episode)}>
+            <b>New episode</b>
+            <span>S{freshEpisode.season}:E{freshEpisode.episode} · added {agoLabel(freshEpisode.added)}</span>
+          </button>
+        {/if}
 
         <div class="actions">
           <button class="btn-play" onclick={playMain} disabled={isSeries && metaLoading && !seasons.length}>
@@ -382,9 +484,14 @@
           </button>
 
           {#if trailer}
-            <button class="btn-secondary" onclick={playTrailer}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2.5" y="5" width="19" height="14" rx="3"/><path d="M10 9.5v5l4.5-2.5z" fill="currentColor"/></svg>
-              Trailer
+            <button class="btn-secondary" onclick={playTrailer} disabled={trailerLoading} aria-busy={trailerLoading}>
+              {#if trailerLoading}
+                <span class="btn-spin" aria-hidden="true"></span>
+                Loading trailer…
+              {:else}
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2.5" y="5" width="19" height="14" rx="3"/><path d="M10 9.5v5l4.5-2.5z" fill="currentColor"/></svg>
+                Trailer
+              {/if}
             </button>
           {/if}
 
@@ -470,12 +577,16 @@
               {#each episodes as e (e.id)}
                 {@const dl = activeDownload((d) => d.url === e.stream_url)}
                 {@const isResume = resume?.season === s.season_number && resume?.episode === e.episode_num}
-                <li class="ep" class:current={isResume}>
+                {@const te = tmdbEpisode(s.season_number, e)}
+                {@const still = e.image ?? te?.still ?? null}
+                {@const epPlot = e.plot ?? te?.overview ?? null}
+                {@const epSecs = e.duration_secs ?? (te?.runtime ? te.runtime * 60 : null)}
+                <li class="ep" class:current={isResume} data-ep={`${s.season_number}:${e.episode_num}`}>
                   <button class="ep-main" onclick={() => playEpisode(s, e)}>
                     <span class="ep-num">{e.episode_num}</span>
                     <span class="ep-thumb">
-                      {#if e.image || poster}
-                        <img src={e.image ?? (backdropReady ? artwork : poster)} alt="" loading="lazy" class:fallback={!e.image} />
+                      {#if still || poster}
+                        <img src={still ?? (backdropReady ? artwork : poster)} alt="" loading="lazy" class:fallback={!still} />
                       {/if}
                       <span class="ep-play" aria-hidden="true">
                         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.14v13.72a1 1 0 001.5.86l11-6.86a1 1 0 000-1.72l-11-6.86A1 1 0 008 5.14z"/></svg>
@@ -484,11 +595,12 @@
                     </span>
                     <span class="ep-text">
                       <span class="ep-title-row">
-                        <span class="ep-title" dir="auto">{episodeTitle(e)}</span>
-                        {#if e.duration_secs}<span class="ep-dur">{formatRuntime(e.duration_secs)}</span>{/if}
+                        <span class="ep-title" dir="auto">{episodeName(e.title, e.episode_num, te?.name)}</span>
+                        {#if epSecs}<span class="ep-dur">{formatRuntime(epSecs)}</span>{/if}
                       </span>
                       {#if isResume}<span class="ep-tag">Last watched</span>{/if}
-                      {#if e.plot}<span class="ep-plot" dir="auto">{e.plot}</span>{/if}
+                      {#if isRecent(e.added)}<span class="ep-tag new">New · added {agoLabel(e.added!)}</span>{/if}
+                      {#if epPlot}<span class="ep-plot" dir="auto">{epPlot}</span>{/if}
                     </span>
                   </button>
                   <button
@@ -563,6 +675,9 @@
           {#if meta?.cast}<div><dt>Cast</dt><dd dir="auto">{meta.cast}</dd></div>{/if}
           {#if meta?.genres.length}<div><dt>Genres</dt><dd>{meta.genres.join(', ')}</dd></div>{/if}
           {#if meta?.released}<div><dt>Released</dt><dd>{meta.released}</dd></div>{/if}
+          {#if newest}<div><dt>Latest episode</dt><dd>S{newest.season}:E{newest.episode} · added {agoLabel(newest.added)}</dd></div>{/if}
+          {#if fileDetails.video}<div><dt>Video</dt><dd>{fileDetails.video}</dd></div>{/if}
+          {#if fileDetails.audio}<div><dt>Audio</dt><dd>{fileDetails.audio}</dd></div>{/if}
           <div><dt>Category</dt><dd dir="auto">{ch.group_name}</dd></div>
           <div><dt>Playlist</dt><dd>{$playlists.find((p) => p.id === ch!.playlist_id)?.name ?? '—'}</dd></div>
         </dl>
@@ -576,6 +691,17 @@
 </div>
 
 <style>
+  .btn-spin {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    border: 2.5px solid oklch(1 0 0 / 0.25);
+    border-top-color: currentColor;
+    animation: btn-spin 700ms linear infinite;
+  }
+  @keyframes btn-spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .btn-spin { animation: none; } }
+
   .title-page {
     --gutter: clamp(24px, 3.6vw, 60px);
     position: relative;
@@ -724,6 +850,32 @@
     line-height: 1.6;
   }
   .meta .genres { color: var(--color-text-muted); }
+
+  .fresh {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 14px;
+    padding: 6px 12px 6px 6px;
+    border-radius: 999px;
+    background: oklch(0.2 0.02 25 / 0.85);
+    box-shadow: inset 0 0 0 1px oklch(1 0 0 / 0.08);
+    font-size: 0.875rem;
+    color: oklch(0.9 0.004 25);
+    transition: background 200ms var(--ease-out);
+  }
+  .fresh:hover { background: oklch(0.26 0.03 25 / 0.95); }
+  .fresh:focus-visible { outline: 2px solid var(--color-text); outline-offset: 2px; }
+  .fresh b {
+    padding: 3px 9px;
+    border-radius: 999px;
+    background: var(--color-accent);
+    color: white;
+    font-size: 0.6875rem;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
 
   .actions {
     display: flex;
@@ -965,6 +1117,7 @@
     text-transform: uppercase;
     color: var(--color-accent-soft);
   }
+  .ep-tag.new { color: var(--color-accent-green); }
   .ep-plot {
     font-size: 0.875rem;
     line-height: 1.5;
