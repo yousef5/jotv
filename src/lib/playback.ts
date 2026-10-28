@@ -95,3 +95,11 @@ export function searchTitle(name: string): string {
   t = latin ?? halves[0] ?? t;
   return t.replace(/[()]/g, ' ').replace(/\s{2,}/g, ' ').trim();
 }
+
+/**
+ * WebKitGTK lifts a word whose tanween follows the alif ("نظاماً") above the line.
+ * The equally standard spelling with the mark before the alif ("نظامًا") renders right.
+ */
+export function fixArabic(text: string): string {
+  return text.replace(/\u0627\u064B/g, '\u064B\u0627');
+}

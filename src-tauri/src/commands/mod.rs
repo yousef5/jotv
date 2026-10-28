@@ -12,4 +12,5 @@ pub mod reels;
 pub mod search;
 pub mod settings;
 pub mod social;
+pub mod system;
 pub mod tmdb;

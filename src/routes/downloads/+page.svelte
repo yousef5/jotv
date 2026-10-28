@@ -7,8 +7,10 @@
   } from '$lib/tauri';
   import type { Download } from '$lib/tauri';
 
+  // Hold the empty state until the first load, or it flashes before the list
+  let loaded = $state(false);
   onMount(() => {
-    loadDownloads();
+    loadDownloads().finally(() => (loaded = true));
   });
 
   async function handlePause(d: Download) {
@@ -58,7 +60,7 @@
 
   function getFilename(d: Download): string {
     if (d.file_path) {
-      const parts = d.file_path.split('/');
+      const parts = d.file_path.split(/[\\/]/);
       return parts[parts.length - 1] || d.file_path;
     }
     try {
@@ -95,7 +97,7 @@
   let completedDownloads = $derived($downloads.filter(d => d.status === 'completed'));
 </script>
 
-<div class="downloads-page fade-in">
+<div class="downloads-page">
   <!-- Stats header -->
   <div class="stats-bar">
     <div class="stat-item">
@@ -125,7 +127,9 @@
     {/if}
   </div>
 
-  {#if $downloads.length === 0}
+  {#if !loaded && $downloads.length === 0}
+    <!-- first load -->
+  {:else if $downloads.length === 0}
     <div class="empty">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
       <p>No downloads yet</p>
@@ -369,7 +373,7 @@
     color: var(--color-text-muted);
     font-size: 12px;
     font-weight: 500;
-    transition: all 0.15s;
+    transition: background 0.15s, color 0.15s;
   }
 
   .btn-clear:hover {
@@ -444,7 +448,7 @@
   }
 
   .dl-card:hover {
-    border-color: rgba(255, 255, 255, 0.1);
+    border-color: oklch(var(--n1000) / 0.1);
   }
 
   .dl-card.active {
@@ -502,7 +506,7 @@
 
   .dl-ring-bg {
     fill: none;
-    stroke: rgba(255, 255, 255, 0.06);
+    stroke: oklch(var(--n1000) / 0.06);
     stroke-width: 2.5;
   }
 
@@ -644,7 +648,7 @@
     border-radius: 8px;
     background: var(--color-surface);
     color: var(--color-text-muted);
-    transition: all 0.15s;
+    transition: background 0.15s, color 0.15s;
   }
 
   .dl-btn:hover {

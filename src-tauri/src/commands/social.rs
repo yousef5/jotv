@@ -7,6 +7,7 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
+use crate::tools::{program, NoConsole};
 use tokio::sync::Mutex as TokioMutex;
 
 /// Manages active social download processes
@@ -87,15 +88,17 @@ fn detect_platform(url: &str) -> String {
 
 /// Try to find the yt-dlp binary on the system
 async fn find_ytdlp() -> Result<String, String> {
-    // Try the plain command first (relies on PATH)
+    // The copy shipped with the app (Windows), else PATH
+    let bundled = program("yt-dlp").to_string_lossy().into_owned();
     let paths_to_try = [
-        "yt-dlp",
+        bundled.as_str(),
         "/usr/bin/yt-dlp",
         "/usr/local/bin/yt-dlp",
     ];
 
     // Also try ~/.local/bin/yt-dlp
     let home_path = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
         .map(|h| format!("{}/.local/bin/yt-dlp", h))
         .unwrap_or_default();
 
@@ -104,6 +107,7 @@ async fn find_ytdlp() -> Result<String, String> {
             continue;
         }
         let result = Command::new(path)
+            .no_console()
             .arg("--version")
             .output()
             .await;
@@ -121,6 +125,7 @@ async fn find_ytdlp() -> Result<String, String> {
 pub async fn check_ytdlp() -> Result<String, String> {
     let bin = find_ytdlp().await?;
     let output = Command::new(&bin)
+        .no_console()
         .arg("--version")
         .output()
         .await
@@ -292,6 +297,7 @@ pub async fn get_social_video_info(url: String) -> Result<SocialVideoInfo, Strin
     let bin = find_ytdlp().await?;
 
     let output = Command::new(&bin)
+        .no_console()
         .args(["--dump-json", "--no-download", "--no-warnings", &url])
         .output()
         .await
@@ -488,6 +494,7 @@ async fn run_social_download(
     args.push(url.to_string());
 
     let mut child = Command::new(bin)
+        .no_console()
         .args(&args)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -854,6 +861,7 @@ pub struct ResolvedVideo {
 pub async fn resolve_video(url: String) -> Result<ResolvedVideo, String> {
     let bin = find_ytdlp().await?;
     let output = Command::new(&bin)
+        .no_console()
         .args([
             "-j",
             "--no-playlist",

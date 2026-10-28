@@ -10,7 +10,7 @@
 
 <script lang="ts">
   import { tick } from 'svelte';
-  import { fly } from 'svelte/transition';
+  import { jsFly } from '$lib/motion';
 
   // A dark menu in place of <select>: WebKitGTK draws native selects in the
   // light GTK theme, and they can't show colour dots or nesting.
@@ -57,7 +57,7 @@
   function pick(o: DropdownOption) {
     open = false;
     if (o.value !== value || buttonText) onchange(o.value);
-    root?.querySelector('button')?.focus();
+    root?.querySelector('button')?.focus({ preventScroll: true });
   }
 
   function onKey(e: KeyboardEvent) {
@@ -112,7 +112,7 @@
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
   </button>
   {#if open}
-    <ul class="menu" class:up id={uid} role="listbox" aria-label={label} bind:this={list} transition:fly={{ y: up ? 6 : -6, duration: 140 }}>
+    <ul class="menu" class:up id={uid} role="listbox" aria-label={label} bind:this={list} transition:jsFly={{ y: up ? 6 : -6, duration: 140 }}>
       {#each options as o, i (o.value)}
         <li
           role="option"
@@ -160,7 +160,8 @@
   .trigger.open, .trigger:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--color-text-muted); }
   .trigger:disabled { opacity: 0.45; cursor: default; }
   .trigger .val { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .trigger > svg { flex: none; width: 14px; height: 14px; color: var(--color-text-muted); transition: transform 150ms var(--ease-out); }
+  .trigger > svg { flex: none; width: 14px; height: 14px; color: var(--color-text-muted); }
+  /* Flips instantly: a transform transition blinks a frame in WebKitGTK when it ends */
   .trigger.open > svg { transform: rotate(180deg); }
 
   .menu {
@@ -176,8 +177,8 @@
     padding: 5px;
     list-style: none;
     border-radius: 10px;
-    background: oklch(0.22 0.005 25);
-    box-shadow: 0 22px 48px -12px oklch(0 0 0 / 0.85), 0 0 0 1px oklch(1 0 0 / 0.1);
+    background: oklch(var(--n220));
+    box-shadow: 0 22px 48px -12px oklch(0 0 0 / 0.85), 0 0 0 1px oklch(var(--n1000) / 0.1);
     scrollbar-width: thin;
   }
   .menu.up { top: auto; bottom: calc(100% + 8px); }
@@ -190,11 +191,11 @@
     border-radius: 6px;
     font-size: 0.8125rem;
     font-weight: 600;
-    color: oklch(0.88 0.004 25);
+    color: oklch(var(--n880));
     cursor: pointer;
   }
   li.sub { padding-left: 28px; font-weight: 500; }
-  li.active { background: oklch(1 0 0 / 0.08); color: var(--color-text); }
+  li.active { background: oklch(var(--n1000) / 0.08); color: var(--color-text); }
   li[aria-selected='true'] { color: var(--color-text); }
   li .val { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .tick { flex: none; width: 15px; height: 15px; color: var(--color-accent-soft); }

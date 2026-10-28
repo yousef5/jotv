@@ -169,7 +169,7 @@
     letter-spacing: inherit;
     border-radius: 4px;
   }
-  .row-link:hover { color: oklch(0.85 0.004 25); }
+  .row-link:hover { color: oklch(var(--n850)); }
   .row-link:focus-visible { outline: 2px solid var(--color-text); outline-offset: 3px; }
 
   .row-more {
@@ -181,13 +181,13 @@
     font-size: 0.8125rem;
     font-weight: 600;
     color: var(--color-accent-soft);
-    opacity: 0;
-    transform: translateX(-6px);
-    transition: opacity 200ms var(--ease-out), transform 200ms var(--ease-out);
+    /* Instant show/hide: WebKitGTK glitches a frame when a GPU opacity/transform
+       transition ends */
+    visibility: hidden;
   }
   .row-more :global(svg) { width: 14px; height: 14px; }
   .row:hover .row-more,
-  .row-more:focus-visible { opacity: 1; transform: none; }
+  .row-more:focus-visible { visibility: visible; }
 
   .row-body { position: relative; }
 
@@ -207,6 +207,8 @@
 
   .tile {
     flex: 0 0 var(--tile-w);
+    /* A long caption must not widen its tile */
+    min-width: 0;
     display: flex;
     flex-direction: column;
     gap: 8px;
@@ -225,13 +227,16 @@
     border-radius: 6px;
     overflow: hidden;
     background: var(--color-card);
-    transition: transform 240ms var(--ease-out), box-shadow 240ms var(--ease-out);
+    /* Hover uses paint-only properties (top, box-shadow): WebKitGTK glitches a frame
+       when a GPU transform/opacity transition ends, flashing the card you just left */
+    top: 0;
+    transition: top 220ms var(--ease-out), box-shadow 220ms var(--ease-out);
   }
   .landscape .art { aspect-ratio: 16 / 9; }
 
   .tile:hover .art,
   .tile:focus-visible .art {
-    transform: scale(1.07);
+    top: -6px;
     box-shadow: 0 18px 40px -12px oklch(0 0 0 / 0.8);
     z-index: 2;
   }
@@ -332,13 +337,13 @@
     flex-direction: column;
     gap: 3px;
     padding: 40px 10px 10px;
-    background: linear-gradient(to top, oklch(0.1 0.004 20 / 0.95) 15%, transparent);
-    opacity: 0;
-    transition: opacity 200ms var(--ease-out);
+    background: linear-gradient(to top, oklch(var(--n100) / 0.95) 15%, transparent);
+    /* Instant, no opacity fade: see .art */
+    visibility: hidden;
   }
-  .landscape .hover-info { background: linear-gradient(to top, oklch(0.1 0.004 20 / 0.7), transparent); }
+  .landscape .hover-info { background: linear-gradient(to top, oklch(var(--n100) / 0.7), transparent); }
   .tile:hover .hover-info,
-  .tile:focus-visible .hover-info { opacity: 1; }
+  .tile:focus-visible .hover-info { visibility: visible; }
 
   .play-dot {
     width: 30px;
@@ -392,22 +397,22 @@
     place-items: center;
     padding: 0;
     color: var(--color-text);
-    background: oklch(0.12 0.004 20 / 0.6);
-    opacity: 0;
-    transition: opacity 200ms var(--ease-out), background 200ms var(--ease-out);
+    background: oklch(var(--n120) / 0.6);
+    /* Instant show/hide (see .row-more) */
+    visibility: hidden;
+    transition: background 150ms var(--ease-out);
   }
   .landscape ~ .pager,
   .pager:has(~ .landscape) { bottom: 62px; }
   .pager.prev { left: 0; border-radius: 0 6px 6px 0; }
   .pager.next { right: 0; border-radius: 6px 0 0 6px; }
-  .pager :global(svg) { width: 28px; height: 28px; transition: transform 200ms var(--ease-out); }
+  .pager :global(svg) { width: 28px; height: 28px; }
   .row-body:hover .pager,
-  .pager:focus-visible { opacity: 1; }
-  .pager:hover { background: oklch(0.12 0.004 20 / 0.85); }
-  .pager:hover :global(svg) { transform: scale(1.2); }
+  .pager:focus-visible { visibility: visible; }
+  .pager:hover { background: oklch(var(--n120) / 0.85); }
 
   @media (prefers-reduced-motion: reduce) {
     .art, .hover-info, .pager, .row-more { transition: none; }
-    .tile:hover .art { transform: none; }
+    .tile:hover .art { top: 0; }
   }
 </style>

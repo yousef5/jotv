@@ -151,14 +151,14 @@
     text-align: start;
     transition: background 120ms var(--ease-out);
   }
-  .opt:hover { background: oklch(1 0 0 / 0.06); }
+  .opt:hover { background: oklch(var(--n1000) / 0.06); }
   .opt:focus-visible { outline: 2px solid var(--color-text); outline-offset: -2px; }
   .opt i {
     flex-shrink: 0;
     width: 16px;
     height: 16px;
     border-radius: 50%;
-    box-shadow: inset 0 0 0 2px oklch(1 0 0 / 0.35);
+    box-shadow: inset 0 0 0 2px oklch(var(--n1000) / 0.35);
     transition: box-shadow 120ms var(--ease-out);
   }
   .opt.on i { box-shadow: inset 0 0 0 5px var(--color-accent); }
@@ -172,14 +172,14 @@
     width: 34px;
     height: 34px;
     border-radius: 50%;
-    background: oklch(1 0 0 / 0.08);
+    background: oklch(var(--n1000) / 0.08);
     color: var(--color-text);
     font-size: 1.125rem;
     font-weight: 700;
     line-height: 1;
     transition: background 120ms var(--ease-out);
   }
-  .step:hover { background: oklch(1 0 0 / 0.16); }
+  .step:hover { background: oklch(var(--n1000) / 0.16); }
   .step:focus-visible { outline: 2px solid var(--color-text); outline-offset: 2px; }
   .sync-value {
     flex: 1;

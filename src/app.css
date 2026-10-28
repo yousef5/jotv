@@ -2,7 +2,64 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
+@font-face {
+  font-family: 'JoTV Arabic';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 160 700;
+  src: url('../node_modules/@fontsource-variable/readex-pro/files/readex-pro-arabic-wght-normal.woff2') format('woff2-variations');
+  unicode-range: U+0600-06FF, U+0750-077F, U+0870-08FF, U+FB50-FDFF, U+FE70-FEFC;
+}
+
+/* Dark is the default theme. `.dark-zone` keeps it inside anything drawn over
+   pictures or video (hero billboards, the player), so those stay dark in light theme. */
+:root,
+.dark-zone {
+  color-scheme: dark;
+  /* Neutral scale: every grey in the app is one of these, as raw oklch
+     channels so it can take an alpha: oklch(var(--n200) / 0.9) */
+  --n80: 0.08 0.003 25;
+  --n90: 0.09 0.003 25;
+  --n100: 0.1 0.004 25;
+  --n110: 0.11 0.004 25;
+  --n120: 0.12 0.004 25;
+  --n130: 0.13 0.004 25;
+  --n135: 0.135 0.004 25;
+  --n140: 0.14 0.004 25;
+  --n150: 0.15 0.004 25;
+  --n155: 0.155 0.004 25;
+  --n160: 0.16 0.004 25;
+  --n165: 0.165 0.004 25;
+  --n170: 0.17 0.005 25;
+  --n180: 0.18 0.005 25;
+  --n200: 0.2 0.005 25;
+  --n210: 0.21 0.006 25;
+  --n220: 0.22 0.005 25;
+  --n240: 0.24 0.005 25;
+  --n250: 0.25 0.005 25;
+  --n270: 0.27 0.005 25;
+  --n280: 0.28 0.006 25;
+  --n300: 0.3 0.006 25;
+  --n350: 0.35 0.004 25;
+  --n400: 0.4 0.004 25;
+  --n420: 0.42 0.004 25;
+  --n550: 0.55 0.004 25;
+  --n600: 0.6 0.01 25;
+  --n780: 0.78 0.005 25;
+  --n800: 0.8 0.004 25;
+  --n820: 0.82 0.004 25;
+  --n840: 0.84 0.004 25;
+  --n850: 0.85 0.004 25;
+  --n860: 0.86 0.004 25;
+  --n880: 0.88 0.004 25;
+  --n900: 0.9 0.004 25;
+  --n920: 0.92 0.004 25;
+  --n950: 0.95 0.003 25;
+  --n960: 0.96 0.003 25;
+  --n970: 0.97 0.003 25;
+  --n980: 0.98 0.004 25;
+  --n1000: 1 0 0;
+
   /* Cinematic near-black, warm-tinted toward the brand red */
   --color-base: oklch(0.165 0.004 25);
   --color-sidebar: oklch(0.13 0.004 25);
@@ -25,6 +82,69 @@
   --transition-fast: 0.2s var(--ease-out);
 }
 
+:root[data-theme='light'] {
+  color-scheme: light;
+  /* The same scale, flipped: dark surfaces turn into soft whites, light text
+     and white overlays turn into near-black ink */
+  --n80: 1 0.002 25;
+  --n90: 0.996 0.002 25;
+  --n100: 0.992 0.002 25;
+  --n110: 0.987 0.002 25;
+  --n120: 0.983 0.002 25;
+  --n130: 0.979 0.002 25;
+  --n135: 0.977 0.002 25;
+  --n140: 0.975 0.002 25;
+  --n150: 0.971 0.002 25;
+  --n155: 0.969 0.002 25;
+  --n160: 0.966 0.002 25;
+  --n165: 0.964 0.002 25;
+  --n170: 0.962 0.002 25;
+  --n180: 0.958 0.002 25;
+  --n200: 0.95 0.002 25;
+  --n210: 0.945 0.002 25;
+  --n220: 0.941 0.002 25;
+  --n240: 0.933 0.002 25;
+  --n250: 0.929 0.002 25;
+  --n270: 0.92 0.002 25;
+  --n280: 0.916 0.002 25;
+  --n300: 0.908 0.002 25;
+  --n350: 0.887 0.002 25;
+  --n400: 0.866 0.002 25;
+  --n420: 0.857 0.002 25;
+  --n550: 0.45 0.002 25;
+  --n600: 0.53 0.01 25;
+  --n780: 0.35 0.002 25;
+  --n800: 0.33 0.002 25;
+  --n820: 0.31 0.002 25;
+  --n840: 0.29 0.002 25;
+  --n850: 0.28 0.002 25;
+  --n860: 0.27 0.002 25;
+  --n880: 0.25 0.002 25;
+  --n900: 0.23 0.002 25;
+  --n920: 0.21 0.002 25;
+  --n950: 0.18 0.002 25;
+  --n960: 0.17 0.002 25;
+  --n970: 0.16 0.002 25;
+  --n980: 0.15 0.002 25;
+  --n1000: 0.18 0.002 25;
+
+  --color-base: oklch(0.966 0.002 25);
+  --color-sidebar: oklch(0.985 0.002 25);
+  --color-card: oklch(1 0 0);
+  --color-surface: oklch(0.945 0.002 25);
+  --color-border: oklch(0.88 0.002 25);
+  --color-hover: oklch(0.92 0.002 25);
+  --color-accent-soft: oklch(0.55 0.2 27);
+  --color-accent-green: oklch(0.55 0.13 165);
+  --color-accent-yellow: oklch(0.6 0.14 75);
+  --color-accent-purple: oklch(0.5 0.17 285);
+  --color-text: oklch(0.18 0.006 25);
+  --color-text-muted: oklch(0.45 0.008 25);
+}
+
+/* Colour is inherited as a resolved value, so a dark zone sets its own */
+.dark-zone { color: var(--color-text); }
+
 * {
   box-sizing: border-box;
   margin: 0;
@@ -34,8 +154,9 @@
 html, body {
   height: 100%;
   overflow: hidden;
-  /* Bundled: Inter for Latin, IBM Plex Sans Arabic (arabic subset only) for Arabic */
-  font-family: 'Inter Variable', 'IBM Plex Sans Arabic', 'Inter', -apple-system, BlinkMacSystemFont,
+  /* Bundled: Readex Pro for Arabic (listed first, but limited to the Arabic range so
+     Latin falls through to Inter; this also keeps Arabic marks in the same font) */
+  font-family: 'JoTV Arabic', 'Inter Variable', 'IBM Plex Sans Arabic', 'Inter', -apple-system, BlinkMacSystemFont,
     'Segoe UI', Roboto, sans-serif;
   background: var(--color-base);
   color: var(--color-text);
@@ -64,17 +185,14 @@ html, body {
 
 /* Utility classes */
 .glass {
-  background: oklch(0.2 0.005 25 / 0.6);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  /* No backdrop-filter: it makes WebKitGTK repaint slowly; opaque enough to read */
+  background: oklch(var(--n200) / 0.9);
+  border: 1px solid oklch(var(--n1000) / 0.08);
 }
 
 .glass-heavy {
-  background: oklch(0.15 0.004 25 / 0.85);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: oklch(var(--n150) / 0.94);
+  border: 1px solid oklch(var(--n1000) / 0.1);
 }
 
 /* Button base */
@@ -83,7 +201,9 @@ button {
   border: none;
   outline: none;
   font-family: inherit;
-  transition: all var(--transition-fast);
+  /* Paint-only: WebKitGTK blinks for a frame when a GPU opacity/transform transition ends */
+  transition: background-color var(--transition-fast), color var(--transition-fast),
+    border-color var(--transition-fast), box-shadow var(--transition-fast);
 }
 
 button:disabled {
@@ -117,7 +237,7 @@ select {
   padding-right: 32px !important;
   cursor: pointer;
 }
-select option { background: oklch(0.2 0.005 25); color: oklch(0.96 0.003 25); }
+select option { background: oklch(var(--n200)); color: oklch(var(--n960)); }
 
 input:focus, select:focus, textarea:focus {
   border-color: var(--color-accent);
@@ -159,11 +279,14 @@ input::placeholder {
   background: var(--color-card);
   border-radius: var(--radius-card);
   border: 1px solid var(--color-border);
-  transition: transform var(--transition-fast), box-shadow var(--transition-fast);
+  /* Lift with top (paint-only), not transform: see button */
+  position: relative;
+  top: 0;
+  transition: top var(--transition-fast), box-shadow var(--transition-fast);
 }
 
 .card:hover {
-  transform: translateY(-2px);
+  top: -2px;
   box-shadow: 0 8px 25px rgba(0, 0, 0, 0.3);
 }
 
@@ -197,14 +320,4 @@ input::placeholder {
 .badge-purple {
   background: rgba(123, 104, 238, 0.15);
   color: var(--color-accent-purple);
-}
-
-/* Fade animation */
-@keyframes fadeIn {
-  from { opacity: 0; transform: translateY(8px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-.fade-in {
-  animation: fadeIn 0.3s ease forwards;
 }

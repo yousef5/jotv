@@ -18,21 +18,6 @@
     heroIndex: number;
   }
 
-  interface HeroInfo {
-    backdrop: string | null;
-    plot: string | null;
-    genres: string[];
-    year: string | null;
-    rating: number | null;
-    runtime: string | null;
-    /** TMDB title treatment, when a key is set */
-    logo?: string | null;
-  }
-
-  // Survive navigation so returning to the dashboard doesn't re-hit the Xtream API
-  // (the provider IP-blocks request bursts).
-  const heroInfoCache = new Map<number, HeroInfo | null>();
-
   // Last rendered dashboard: going back shows it instantly, so the scroll
   // position can be restored before the background refresh finishes.
   let homeCache: HomeData | null = null;
@@ -41,16 +26,18 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { get } from 'svelte/store';
-  import { fade } from 'svelte/transition';
   import { goto } from '$app/navigation';
   import AddPlaylistModal from '$lib/components/AddPlaylistModal.svelte';
+  import SystemCheck from '$lib/components/SystemCheck.svelte';
+  import logoMark from '$lib/assets/logo-mark.png';
+  import Hero from '$lib/components/Hero.svelte';
   import MediaRow from '$lib/components/MediaRow.svelte';
   import type { RowItem } from '$lib/components/MediaRow.svelte';
   import SyncButton from '$lib/components/SyncButton.svelte';
-  import { splitTitle, toRating, formatRuntime, backdropUrl, isWideBackdrop, searchTitle } from '$lib/playback';
+  import { splitTitle } from '$lib/playback';
   import {
     getDashboardStats, getContentTypeCounts, getRecentlyWatched,
-    getFavorites, getRecentlyAdded, getChannelsByGroup, getVodInfo, getSeriesInfo, browseMedia, tmdbDetails,
+    getFavorites, getRecentlyAdded, getChannelsByGroup, browseMedia,
     getSeriesUpdates, getMediaFacets,
   } from '$lib/tauri';
   import { agoLabel } from '$lib/mediaInfo';
@@ -64,8 +51,7 @@
 
   export const snapshot = mainScrollSnapshot;
 
-  const FEATURED_COUNT = 5;
-  const HERO_SECONDS = 9;
+  const FEATURED_COUNT = 6;
   // Too broad to make an interesting row
   const BROAD_GENRES = ['drama', 'kids', 'family', 'tv movie'];
 
@@ -87,9 +73,6 @@
   let favorites = $state<FavoriteChannel[]>(cached?.favorites ?? []);
 
   let heroIndex = $state(cached?.heroIndex ?? 0);
-  let heroInfo = $state<Record<number, HeroInfo | null>>({});
-  let backdropLoaded = $state<Record<number, boolean>>({});
-
   // Alternate movies and series for the billboard
   let featured = $derived.by(() => {
     const vod = newVod.filter((c) => c.logo_url);
@@ -101,10 +84,6 @@
     }
     return out;
   });
-
-  let current = $derived(featured[heroIndex] ?? null);
-  let currentInfo = $derived(current ? heroInfo[current.id] : undefined);
-  let currentTitle = $derived(current ? splitTitle(current.name) : null);
 
   onMount(() => {
     loadContent();
@@ -123,14 +102,6 @@
       seenVersion = v;
       loadContent();
     }
-  });
-
-  $effect(() => {
-    if (heroIndex >= featured.length) heroIndex = 0;
-    const cur = featured[heroIndex];
-    const next = featured[(heroIndex + 1) % featured.length];
-    if (cur) ensureHeroInfo(cur);
-    if (next && next !== cur) ensureHeroInfo(next);
   });
 
   async function loadContent() {
@@ -209,61 +180,6 @@
   async function loadPlaylistDetails(p: Playlist) {
     getContentTypeCounts(p.id).then((c) => (countsMap = { ...countsMap, [p.id]: c })).catch(() => {});
     loadAccount(p);
-  }
-
-  // ── Billboard metadata ──────────────────────────────────────────────────────
-
-  async function ensureHeroInfo(ch: Channel) {
-    if (ch.id in heroInfo) return;
-    if (heroInfoCache.has(ch.id)) {
-      heroInfo = { ...heroInfo, [ch.id]: heroInfoCache.get(ch.id) ?? null };
-      return;
-    }
-    heroInfo = { ...heroInfo, [ch.id]: null };
-    const p = $playlists.find((pl) => pl.id === ch.playlist_id);
-    if (!p || p.source_type !== 'xtream' || !p.source_url || !p.xtream_username || !p.xtream_password) return;
-
-    const last = ch.stream_url.split('/').pop() ?? '';
-    const remoteId = parseInt(last.split('.')[0]);
-    if (isNaN(remoteId)) return;
-
-    try {
-      const raw = ch.content_type === 'series'
-        ? (await getSeriesInfo(p.source_url, p.xtream_username, p.xtream_password, remoteId)).info
-        : (await getVodInfo(p.source_url, p.xtream_username, p.xtream_password, remoteId)).info;
-      const durationSecs = 'duration_secs' in raw ? (raw.duration_secs as number | null) : null;
-      const info: HeroInfo = {
-        backdrop: backdropUrl(raw.backdrop_path, raw.cover),
-        plot: raw.plot?.trim() || null,
-        genres: (raw.genre ?? '').split(/[,/]/).map((g) => g.trim()).filter(Boolean).slice(0, 3),
-        year: raw.release_date?.slice(0, 4) || null,
-        rating: toRating(raw.rating),
-        runtime: formatRuntime(durationSecs),
-      };
-      // TMDB (optional): sharper backdrop and the title logo. The provider's ids pin the exact title.
-      const year = splitTitle(ch.name).year ?? info.year;
-      const t = await tmdbDetails(ch.content_type as 'vod' | 'series', searchTitle(ch.name), year ? +year : null, {
-        tmdbId: raw.tmdb_id,
-        tmdbHint: 'tmdb_hint' in raw ? raw.tmdb_hint : null,
-      }).catch(() => null);
-      if (t) {
-        info.backdrop = t.backdrop ?? info.backdrop;
-        info.logo = t.logo;
-        info.plot ??= t.overview;
-      }
-      heroInfoCache.set(ch.id, info);
-      heroInfo = { ...heroInfo, [ch.id]: info };
-    } catch {
-      heroInfoCache.set(ch.id, null);
-    }
-  }
-
-
-
-
-
-  function advanceHero() {
-    if (featured.length > 1) heroIndex = (heroIndex + 1) % featured.length;
   }
 
   // ── Navigation ──────────────────────────────────────────────────────────────
@@ -358,22 +274,20 @@
     <section class="welcome">
       <div class="welcome-glow" aria-hidden="true"></div>
       <div class="welcome-copy">
-        <span class="kicker"><b>J</b>TV</span>
+        <span class="brand"><img src={logoMark} alt="" /><span class="word"><b>Jo</b>Tv</span></span>
         <h1>Your channels, films and series in one place.</h1>
         <p>Add an Xtream account or an M3U link and JoTV builds your library.</p>
         <button class="btn-play" onclick={() => (showAddModal = true)}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
           Add your first playlist
         </button>
+        <!-- Linux: are mpv, FFmpeg and yt-dlp installed? (Windows ships them) -->
+        <div class="welcome-check"><SystemCheck compact /></div>
       </div>
     </section>
   {:else}
     <!-- Billboard -->
-    <section
-      class="hero"
-      aria-roledescription="carousel"
-      aria-label="Featured"
-    >
+    <Hero items={featured} bind:index={heroIndex} label="New on JoTV">
       {#if $accountAlerts.length && !alertDismissed}
         {@const a = $accountAlerts[0]}
         <div class="alert" class:expired={a.kind === 'expired'} role="status">
@@ -405,100 +319,27 @@
         </button>
       </div>
 
-      {#if current && currentTitle}
-        {#key current.id}
-          <div class="hero-media" transition:fade={{ duration: 700 }}>
-            <img class="hero-ambient" src={current.logo_url} alt="" aria-hidden="true" />
-            {#if currentInfo?.backdrop}
-              <img
-                class="hero-backdrop"
-                class:loaded={backdropLoaded[current.id]}
-                src={currentInfo.backdrop}
-                alt=""
-                onload={(e) => (backdropLoaded = { ...backdropLoaded, [current.id]: isWideBackdrop(e.currentTarget as HTMLImageElement) })}
-              />
-            {/if}
-            {#if !backdropLoaded[current.id]}
-              <img class="hero-poster" src={current.logo_url} alt="" out:fade={{ duration: 400 }} />
-            {/if}
+      {#snippet fallback()}
+        {#if contentLoading}
+          <div class="hero-skeleton" aria-hidden="true">
+            <div class="sk sk-kicker"></div>
+            <div class="sk sk-title"></div>
+            <div class="sk sk-line"></div>
+            <div class="sk sk-line short"></div>
+            <div class="sk-actions"><div class="sk sk-btn"></div><div class="sk sk-btn"></div></div>
           </div>
-        {/key}
-
-        <div class="hero-shade" aria-hidden="true"></div>
-
-        {#key current.id}
-          <div class="hero-copy" in:fade={{ duration: 500, delay: 150 }}>
-            <span class="kicker"><b>J</b>{current.content_type === 'series' ? 'SERIES' : 'FILM'}</span>
-            {#if currentInfo?.logo}
-              <h1 class="sr-only">{currentTitle.title}</h1>
-              <img class="hero-logo" src={currentInfo.logo} alt="" />
-            {:else}
-              <h1 class="hero-title" dir="auto">{currentTitle.title}</h1>
-            {/if}
-            <div class="hero-meta">
-              {#if currentInfo?.rating}<span class="score">{currentInfo.rating.toFixed(1)} rating</span>{/if}
-              {#if currentInfo?.year || currentTitle.year}<span>{currentInfo?.year ?? currentTitle.year}</span>{/if}
-              {#if currentInfo?.runtime}<span>{currentInfo.runtime}</span>{/if}
-              <span class="tag">New</span>
-              {#if currentInfo?.genres.length}<span class="genres">{currentInfo.genres.join(' · ')}</span>{/if}
-            </div>
-            {#if currentInfo?.plot}
-              <p class="hero-plot" dir="auto">{currentInfo.plot}</p>
-            {:else}
-              <p class="hero-plot muted" dir="auto">{current.group_name}</p>
-            {/if}
-            <div class="hero-actions">
-              <button class="btn-play" onclick={() => open(current!, current!.content_type === 'series' ? 'detail' : 'play')}>
-                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15a1 1 0 001.53.85l12-7.5a1 1 0 000-1.7l-12-7.5A1 1 0 007 4.5z"/></svg>
-                Play
-              </button>
-              <button class="btn-info" onclick={() => open(current!, 'detail')}>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9.5"/><line x1="12" y1="11" x2="12" y2="16.5"/><circle cx="12" cy="7.75" r="0.6" fill="currentColor"/></svg>
-                More info
-              </button>
-            </div>
-          </div>
-        {/key}
-
-        {#if featured.length > 1}
-          <div class="hero-dots" role="tablist" aria-label="Featured titles">
-            {#each featured as f, i (f.id)}
-              <button
-                class="dot"
-                class:active={i === heroIndex}
-                role="tab"
-                aria-selected={i === heroIndex}
-                aria-label={`Show ${splitTitle(f.name).title}`}
-                onclick={() => (heroIndex = i)}
-              >
-                {#if i === heroIndex}
-                  <span class="dot-fill" style:animation-duration="{HERO_SECONDS}s" onanimationend={advanceHero}></span>
-                {/if}
-              </button>
-            {/each}
-          </div>
-        {/if}
-      {:else if contentLoading}
-        <div class="hero-skeleton" aria-hidden="true">
-          <div class="sk sk-kicker"></div>
-          <div class="sk sk-title"></div>
-          <div class="sk sk-line"></div>
-          <div class="sk sk-line short"></div>
-          <div class="sk-actions"><div class="sk sk-btn"></div><div class="sk sk-btn"></div></div>
-        </div>
-      {:else}
-        <div class="hero-copy empty">
-          <h1 class="hero-title">Live TV</h1>
-          <p class="hero-plot">Your playlists only have live channels. Jump in from the guide.</p>
-          <div class="hero-actions">
+        {:else}
+          <div class="hero-empty">
+            <h1>Live TV</h1>
+            <p>Your playlists only have live channels. Jump in from the guide.</p>
             <button class="btn-play" onclick={() => goto('/live')}>Browse channels</button>
           </div>
-        </div>
-      {/if}
-    </section>
+        {/if}
+      {/snippet}
+    </Hero>
 
     <!-- Rows -->
-    <div class="rows" class:lifted={!!current}>
+    <div class="rows">
       {#if continueItems.length}
         <MediaRow
           title="Continue watching"
@@ -653,62 +494,40 @@
 
   /* ── Shared bits ─────────────────────────────────────────────────────── */
 
-  .kicker {
-    display: inline-flex;
-    align-items: baseline;
-    gap: 6px;
-    font-size: 0.75rem;
-    font-weight: 700;
-    letter-spacing: 0.32em;
-    color: var(--color-text);
-    opacity: 0.9;
-  }
-  .kicker b {
-    font-size: 1.5rem;
-    font-weight: 900;
-    letter-spacing: -0.04em;
-    color: var(--color-accent);
-  }
-
-  .btn-play,
-  .btn-info {
-    display: inline-flex;
-    align-items: center;
-    gap: 10px;
-    height: 46px;
-    padding: 0 26px 0 20px;
-    border-radius: 6px;
-    font-size: 1rem;
-    font-weight: 700;
-    transition: background 200ms var(--ease-out), transform 120ms var(--ease-out);
-  }
-  .btn-play :global(svg),
-  .btn-info :global(svg) { width: 24px; height: 24px; }
-  .btn-play:active,
-  .btn-info:active { transform: scale(0.97); }
-  .btn-play:focus-visible,
-  .btn-info:focus-visible { outline: 2px solid var(--color-text); outline-offset: 3px; }
+  
+  
+  
 
   .btn-play {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    height: 58px;
+    min-width: 230px;
+    padding: 0 34px 0 28px;
+    border-radius: 999px;
     background: var(--color-text);
-    color: oklch(0.14 0.004 25);
+    color: oklch(var(--n140));
+    font-size: 1.125rem;
+    font-weight: 800;
+    box-shadow: 0 12px 30px -10px oklch(0 0 0 / 0.6);
+    transition: background 200ms var(--ease-out);
   }
-  .btn-play:hover { background: oklch(0.85 0.004 25); }
+  .btn-play :global(svg) { width: 24px; height: 24px; }
+  .btn-play:hover { background: oklch(var(--n860)); }
 
-  .btn-info {
-    background: oklch(0.55 0.004 25 / 0.55);
-    color: var(--color-text);
-  }
-  .btn-info:hover { background: oklch(0.55 0.004 25 / 0.38); }
+  
+  
+  
+  
+
+  .btn-play:active { transform: scale(0.96); }
+  .btn-play:focus-visible { outline: 2px solid var(--color-text); outline-offset: 3px; }
 
   /* ── Billboard ───────────────────────────────────────────────────────── */
 
-  .hero {
-    position: relative;
-    height: clamp(460px, 76vh, 820px);
-    overflow: hidden;
-    isolation: isolate;
-  }
+  
 
   .topbar {
     position: absolute;
@@ -732,8 +551,6 @@
     border-radius: 10px;
     background: oklch(0.78 0.15 75 / 0.16);
     box-shadow: inset 0 0 0 1px oklch(0.78 0.15 75 / 0.45);
-    backdrop-filter: blur(14px);
-    -webkit-backdrop-filter: blur(14px);
     color: var(--color-text);
     font-size: 0.875rem;
   }
@@ -746,12 +563,12 @@
     height: 30px;
     padding: 0 12px;
     border-radius: 6px;
-    background: oklch(1 0 0 / 0.12);
+    background: oklch(var(--n1000) / 0.12);
     color: var(--color-text);
     font-size: 0.8125rem;
     font-weight: 700;
   }
-  .alert button:hover { background: oklch(1 0 0 / 0.2); }
+  .alert button:hover { background: oklch(var(--n1000) / 0.2); }
   .alert button.x { width: 30px; padding: 0; display: grid; place-items: center; background: none; }
   .alert button.x :global(svg) { width: 14px; height: 14px; }
 
@@ -763,11 +580,9 @@
     height: 36px;
     padding: 0 8px 0 13px;
     border-radius: 999px;
-    background: oklch(0.13 0.004 25 / 0.55);
-    box-shadow: inset 0 0 0 1px oklch(1 0 0 / 0.14);
-    backdrop-filter: blur(14px);
-    -webkit-backdrop-filter: blur(14px);
-    color: oklch(0.78 0.005 25);
+    background: oklch(var(--n130) / 0.8);
+    box-shadow: inset 0 0 0 1px oklch(var(--n1000) / 0.14);
+    color: oklch(var(--n780));
     font-size: 0.8125rem;
     font-weight: 600;
     text-align: start;
@@ -778,12 +593,12 @@
   .search-pill kbd {
     padding: 1px 7px;
     border-radius: 4px;
-    background: oklch(1 0 0 / 0.1);
+    background: oklch(var(--n1000) / 0.1);
     font-family: inherit;
     font-size: 0.6875rem;
     font-weight: 700;
   }
-  .search-pill:hover { background: oklch(0.22 0.005 25 / 0.75); box-shadow: inset 0 0 0 1px oklch(1 0 0 / 0.28); color: var(--color-text); }
+  .search-pill:hover { background: oklch(var(--n220) / 0.75); box-shadow: inset 0 0 0 1px oklch(var(--n1000) / 0.28); color: var(--color-text); }
   .search-pill:focus-visible { outline: 2px solid var(--color-text); outline-offset: 2px; }
 
   .pill {
@@ -803,179 +618,69 @@
   .pill:hover { background: var(--color-accent-hover); }
   .pill:focus-visible { outline: 2px solid var(--color-text); outline-offset: 2px; }
 
-  .hero-media {
-    position: absolute;
-    inset: 0;
-    z-index: -2;
-  }
+  
 
-  .hero-ambient {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-    filter: blur(90px) saturate(1.3) brightness(0.42);
-    transform: scale(1.4);
-  }
+  
 
-  .hero-backdrop {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-    object-position: center 20%;
-    opacity: 0;
-    transition: opacity 800ms var(--ease-out);
-  }
-  .hero-backdrop.loaded { opacity: 1; }
+  
 
-  .hero-poster {
-    position: absolute;
-    right: calc(var(--gutter) + 4vw);
-    top: 50%;
-    height: min(66%, 560px);
-    aspect-ratio: 2 / 3;
-    object-fit: cover;
-    border-radius: 10px;
-    transform: translateY(-46%);
-    box-shadow: 0 50px 100px -30px oklch(0 0 0 / 0.9), 0 0 0 1px oklch(1 0 0 / 0.1);
-  }
+  /* No wide backdrop: show the poster sharp at a size it holds up at, over its own glow */
+  
 
-  .hero-shade {
-    position: absolute;
-    inset: 0;
-    z-index: -1;
-    background:
-      linear-gradient(to top, var(--color-base) 0%, oklch(0.165 0.004 25 / 0.6) 18%, transparent 42%),
-      linear-gradient(77deg, oklch(0.165 0.004 25 / 0.92) 0%, oklch(0.165 0.004 25 / 0.55) 38%, transparent 68%),
-      linear-gradient(to bottom, oklch(0.1 0.004 25 / 0.55) 0%, transparent 18%);
-  }
+  
 
-  .hero-copy {
+  
+
+  
+
+  
+
+  
+  
+
+  
+  
+  
+  
+
+  
+  
+  
+  
+
+  
+
+  
+  
+  
+  
+  /* Grows with transform only, so its neighbours never shift */
+  
+  /* WebKitGTK draws a square native ring on click; use a round one for keyboard focus only */
+  
+  
+
+  /* Slide timer: a hairline across the picker */
+  
+  
+  
+  
+
+  
+
+  
+
+  .hero-empty {
     position: absolute;
     left: var(--gutter);
-    bottom: clamp(120px, 21vh, 210px);
-    width: min(600px, 46vw);
+    bottom: 84px;
     display: flex;
     flex-direction: column;
     align-items: flex-start;
     gap: 14px;
   }
-
-  .hero-title {
-    font-size: clamp(2.25rem, 4.4vw, 4rem);
-    font-weight: 900;
-    line-height: 1.04;
-    letter-spacing: -0.035em;
-    color: var(--color-text);
-    text-wrap: balance;
-    text-shadow: 0 2px 24px oklch(0 0 0 / 0.45);
-    display: -webkit-box;
-    -webkit-line-clamp: 3;
-    line-clamp: 3;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
-  }
-
-  .hero-logo {
-    max-width: min(460px, 90%);
-    max-height: 160px;
-    object-fit: contain;
-    object-position: left bottom;
-    filter: drop-shadow(0 6px 24px oklch(0 0 0 / 0.55));
-  }
-  .sr-only {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip: rect(0 0 0 0);
-  }
-
-  .hero-meta {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 6px 12px;
-    font-size: 0.9375rem;
-    font-weight: 500;
-    color: oklch(0.88 0.004 25);
-  }
-  .hero-meta .score { color: var(--color-accent-green); font-weight: 700; }
-  .hero-meta .tag {
-    padding: 1px 7px;
-    border: 1px solid oklch(1 0 0 / 0.4);
-    border-radius: 3px;
-    font-size: 0.75rem;
-    font-weight: 700;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-  }
-  .hero-meta .genres { color: var(--color-text-muted); }
-
-  .hero-plot {
-    font-size: 1.0625rem;
-    line-height: 1.5;
-    color: oklch(0.9 0.004 25);
-    max-width: 58ch;
-    text-shadow: 0 1px 12px oklch(0 0 0 / 0.5);
-    display: -webkit-box;
-    -webkit-line-clamp: 3;
-    line-clamp: 3;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
-  }
-  .hero-plot:dir(rtl) { font-size: 1.125rem; line-height: 1.85; }
-  .hero-title:dir(rtl) { line-height: 1.25; letter-spacing: 0; }
-  .hero-plot.muted { color: var(--color-text-muted); }
-
-  .hero-actions {
-    display: flex;
-    gap: 12px;
-    margin-top: 8px;
-  }
-
-  .hero-dots {
-    position: absolute;
-    right: var(--gutter);
-    bottom: clamp(130px, 22vh, 220px);
-    display: flex;
-    gap: 6px;
-  }
-  .dot {
-    position: relative;
-    width: 28px;
-    height: 4px;
-    padding: 0;
-    border-radius: 2px;
-    overflow: hidden;
-    background: oklch(1 0 0 / 0.28);
-    transition: width 300ms var(--ease-out), background 200ms var(--ease-out);
-  }
-  .dot::before { content: ''; position: absolute; inset: -10px 0; }
-  .dot:hover { background: oklch(1 0 0 / 0.5); }
-  .dot.active { width: 48px; }
-  .dot:focus-visible { outline: 2px solid var(--color-text); outline-offset: 3px; }
-  .dot-fill {
-    position: absolute;
-    inset: 0;
-    background: var(--color-text);
-    transform-origin: left;
-    animation-name: fill;
-    animation-timing-function: linear;
-    animation-fill-mode: forwards;
-  }
-  .hero:hover .dot-fill,
-  .hero:focus-within .dot-fill { animation-play-state: paused; }
-
-  @keyframes fill {
-    from { transform: scaleX(0); }
-    to { transform: scaleX(1); }
-  }
-
-  .hero-copy.empty { bottom: 30%; }
+  .hero-empty h1 { font-size: clamp(2.5rem, 5vw, 4.75rem); font-weight: 900; letter-spacing: -0.035em; }
+  .hero-empty p { font-size: 1.0625rem; color: var(--color-text-muted); }
 
   /* ── Rows ────────────────────────────────────────────────────────────── */
 
@@ -986,7 +691,7 @@
     flex-direction: column;
     gap: 18px;
   }
-  .rows.lifted { margin-top: clamp(-150px, -15vh, -90px); }
+  
 
   /* ── Library ─────────────────────────────────────────────────────────── */
 
@@ -1016,9 +721,9 @@
 
   .accounts {
     list-style: none;
-    border-top: 1px solid oklch(1 0 0 / 0.08);
+    border-top: 1px solid oklch(var(--n1000) / 0.08);
   }
-  .accounts li { border-bottom: 1px solid oklch(1 0 0 / 0.08); }
+  .accounts li { border-bottom: 1px solid oklch(var(--n1000) / 0.08); }
 
   .account {
     width: 100%;
@@ -1036,7 +741,7 @@
     font-size: 0.875rem;
     transition: background 200ms var(--ease-out);
   }
-  .account:hover { background: oklch(1 0 0 / 0.04); }
+  .account:hover { background: oklch(var(--n1000) / 0.04); }
   .account:focus-visible { outline: 2px solid var(--color-text); outline-offset: -2px; }
 
   .acc-name {
@@ -1056,7 +761,7 @@
     flex-shrink: 0;
     padding: 2px 6px;
     border-radius: 3px;
-    background: oklch(1 0 0 / 0.08);
+    background: oklch(var(--n1000) / 0.08);
     color: var(--color-text-muted);
     font-size: 0.6875rem;
     font-weight: 700;
@@ -1108,9 +813,9 @@
     width: 18px;
     height: 18px;
     color: var(--color-text-muted);
-    transition: transform 200ms var(--ease-out), color 200ms var(--ease-out);
+    transition: color 200ms var(--ease-out);
   }
-  .account:hover .acc-chevron { transform: translateX(3px); color: var(--color-text); }
+  .account:hover .acc-chevron { color: var(--color-text); }
 
   @media (max-width: 1100px) {
     .account { grid-template-columns: 1fr auto 20px; }
@@ -1121,15 +826,19 @@
 
   .sk {
     border-radius: 4px;
-    background: linear-gradient(90deg, oklch(1 0 0 / 0.05) 0%, oklch(1 0 0 / 0.1) 50%, oklch(1 0 0 / 0.05) 100%);
+    background: linear-gradient(90deg, oklch(var(--n1000) / 0.05) 0%, oklch(var(--n1000) / 0.1) 50%, oklch(var(--n1000) / 0.05) 100%);
     background-size: 200% 100%;
-    animation: shimmer 1.6s linear infinite;
+    /* Hidden for the first 160ms: fast loads go straight to content instead of
+       flashing a skeleton for a frame or two */
+    visibility: hidden;
+    animation: shimmer 1.6s linear infinite, sk-show 0s 160ms forwards;
   }
+  @keyframes sk-show { to { visibility: visible; } }
 
   .hero-skeleton {
     position: absolute;
     left: var(--gutter);
-    bottom: clamp(120px, 21vh, 210px);
+    bottom: 84px;
     width: min(560px, 46vw);
     display: flex;
     flex-direction: column;
@@ -1184,6 +893,11 @@
     gap: 18px;
     max-width: 640px;
   }
+  .brand { display: inline-flex; align-items: center; gap: 12px; }
+  .brand img { width: 64px; height: 64px; object-fit: contain; }
+  .brand .word { font-size: 2rem; font-weight: 900; letter-spacing: -0.04em; color: var(--color-text); }
+  .brand .word b { font-weight: 900; color: var(--color-accent); }
+  .welcome-check { width: 100%; margin-top: 18px; }
   .welcome h1 {
     font-size: clamp(2.5rem, 5vw, 4.25rem);
     font-weight: 900;
@@ -1198,8 +912,7 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .sk { animation: none; }
+    .sk { animation: none; visibility: visible; }
     /* No auto-advance: without an animation, animationend never fires */
-    .dot-fill { animation: none; transform: scaleX(1); }
   }
 </style>

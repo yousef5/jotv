@@ -1,7 +1,7 @@
 <script lang="ts">
   import { askFavoriteCategory } from '$lib/components/FavoriteSaved.svelte';
   import { onDestroy, tick, untrack } from 'svelte';
-  import { fade } from 'svelte/transition';
+  import { jsFade, fadeTo } from '$lib/motion';
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
   import {
@@ -15,6 +15,7 @@
     playExternal, extFromUrl, splitTitle, firstUrl, toRating, formatRuntime, remoteIdFromUrl,
     backdropUrls, isWideBackdrop, searchTitle,
   } from '$lib/playback';
+  import { fixArabic } from '$lib/playback';
   import { qualityTags, qualityDetails, youtubeKey, agoLabel, isRecent, episodeName, latestEpisode } from '$lib/mediaInfo';
   import { pendingWatch, watchHref } from '$lib/stores/watch';
   import type { WatchItem } from '$lib/stores/watch';
@@ -421,7 +422,7 @@
       <button class="btn-play" onclick={back}>Go back</button>
     </div>
   {:else if loading || !ch || !names}
-    <section class="hero">
+    <section class="hero dark-zone">
       <div class="hero-copy">
         <div class="sk" style="width: 90px; height: 18px"></div>
         <div class="sk" style="width: 70%; height: 72px"></div>
@@ -431,23 +432,23 @@
     </section>
   {:else}
     <!-- Hero -->
-    <section class="hero">
+    <section class="hero dark-zone">
       <div class="hero-media" aria-hidden="true">
         {#if poster}<img class="ambient" src={poster} alt="" />{/if}
         {#each slides as src (src)}
-          <img class="backdrop" class:ready={src === currentSlide} {src} alt="" onload={(e) => onSlideLoad(src, e.currentTarget as HTMLImageElement)} />
+          <img class="backdrop" use:fadeTo={src === currentSlide} {src} alt="" onload={(e) => onSlideLoad(src, e.currentTarget as HTMLImageElement)} />
         {/each}
         {#if poster && !backdropReady}
-          <img class="poster" src={poster} alt="" out:fade={{ duration: 400 }} />
+          <img class="poster" src={poster} alt="" out:jsFade={{ duration: 400 }} />
         {/if}
       </div>
       <div class="hero-shade" aria-hidden="true"></div>
 
-      <div class="hero-copy" in:fade={{ duration: 400 }}>
+      <div class="hero-copy" in:jsFade={{ duration: 400 }}>
         <span class="kicker"><b>J</b>{isSeries ? 'SERIES' : 'FILM'}</span>
         {#if tmdb?.logo}
           <h1 class="sr-only">{names.title}</h1>
-          <img class="title-logo" src={tmdb.logo} alt="" in:fade={{ duration: 300 }} />
+          <img class="title-logo" src={tmdb.logo} alt="" in:jsFade={{ duration: 300 }} />
         {:else}
           <h1 class="title" dir="auto">{names.title}</h1>
         {/if}
@@ -465,7 +466,7 @@
         </div>
 
         {#if freshEpisode}
-          <button class="fresh" in:fade={{ duration: 300 }} onclick={() => showEpisode(freshEpisode!.season, freshEpisode!.episode)}>
+          <button class="fresh" in:jsFade={{ duration: 300 }} onclick={() => showEpisode(freshEpisode!.season, freshEpisode!.episode)}>
             <b>New episode</b>
             <span>S{freshEpisode.season}:E{freshEpisode.episode} · added {agoLabel(freshEpisode.added)}</span>
           </button>
@@ -531,7 +532,7 @@
         </div>
 
         {#if plot}
-          <p class="plot" dir="auto">{plot}</p>
+          <p class="plot" dir="auto">{fixArabic(plot)}</p>
         {:else if metaLoading}
           <div class="plot-sk"><div class="sk"></div><div class="sk"></div><div class="sk short"></div></div>
         {/if}
@@ -600,7 +601,7 @@
                       </span>
                       {#if isResume}<span class="ep-tag">Last watched</span>{/if}
                       {#if isRecent(e.added)}<span class="ep-tag new">New · added {agoLabel(e.added!)}</span>{/if}
-                      {#if epPlot}<span class="ep-plot" dir="auto">{epPlot}</span>{/if}
+                      {#if epPlot}<span class="ep-plot" dir="auto">{fixArabic(epPlot)}</span>{/if}
                     </span>
                   </button>
                   <button
@@ -686,7 +687,7 @@
   {/if}
 
   {#if notice}
-    <div class="toast" role="status" transition:fade={{ duration: 180 }}>{notice}</div>
+    <div class="toast" role="status" transition:jsFade={{ duration: 180 }}>{notice}</div>
   {/if}
 </div>
 
@@ -695,7 +696,7 @@
     width: 18px;
     height: 18px;
     border-radius: 50%;
-    border: 2.5px solid oklch(1 0 0 / 0.25);
+    border: 2.5px solid oklch(var(--n1000) / 0.25);
     border-top-color: currentColor;
     animation: btn-spin 700ms linear infinite;
   }
@@ -728,15 +729,13 @@
     display: grid;
     place-items: center;
     border-radius: 50%;
-    background: oklch(0.13 0.004 25 / 0.6);
-    box-shadow: inset 0 0 0 1px oklch(1 0 0 / 0.16);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
+    background: oklch(var(--n130) / 0.82);
+    box-shadow: inset 0 0 0 1px oklch(var(--n1000) / 0.16);
     color: var(--color-text);
-    transition: background 200ms var(--ease-out), transform 200ms var(--ease-out);
+    transition: background 200ms var(--ease-out);
   }
   .back :global(svg) { width: 22px; height: 22px; }
-  .back:hover { background: oklch(0.25 0.005 25 / 0.8); transform: translateX(-2px); }
+  .back:hover { background: oklch(var(--n250) / 0.9); }
   .back:focus-visible { outline: 2px solid var(--color-text); outline-offset: 2px; }
 
   /* ── Hero ─────────────────────────────────────────────────────────────── */
@@ -770,10 +769,9 @@
     height: 100%;
     object-fit: cover;
     object-position: center 22%;
-    opacity: 0;
-    transition: opacity 900ms var(--ease-out);
+    /* Opacity is animated from script (use:fadeTo): a CSS opacity transition
+       blinks for a frame in WebKitGTK when it ends */
   }
-  .backdrop.ready { opacity: 1; }
 
   .poster {
     position: absolute;
@@ -784,7 +782,7 @@
     object-fit: cover;
     border-radius: 10px;
     transform: translateY(-50%);
-    box-shadow: 0 50px 100px -30px oklch(0 0 0 / 0.9), 0 0 0 1px oklch(1 0 0 / 0.1);
+    box-shadow: 0 50px 100px -30px oklch(0 0 0 / 0.9), 0 0 0 1px oklch(var(--n1000) / 0.1);
   }
 
   .hero-shade {
@@ -792,9 +790,9 @@
     inset: 0;
     z-index: -1;
     background:
-      linear-gradient(to top, var(--color-base) 0%, oklch(0.165 0.004 25 / 0.7) 22%, transparent 55%),
-      linear-gradient(80deg, oklch(0.165 0.004 25 / 0.95) 0%, oklch(0.165 0.004 25 / 0.6) 40%, transparent 72%),
-      linear-gradient(to bottom, oklch(0.1 0.004 25 / 0.6) 0%, transparent 20%);
+      linear-gradient(to top, var(--color-base) 0%, oklch(var(--n165) / 0.7) 22%, transparent 55%),
+      linear-gradient(80deg, oklch(var(--n165) / 0.95) 0%, oklch(var(--n165) / 0.6) 40%, transparent 72%),
+      linear-gradient(to bottom, oklch(var(--n100) / 0.6) 0%, transparent 20%);
   }
 
   .hero-copy {
@@ -837,12 +835,12 @@
     gap: 6px 14px;
     font-size: 1rem;
     font-weight: 500;
-    color: oklch(0.88 0.004 25);
+    color: oklch(var(--n880));
   }
   .meta .score { color: var(--color-accent-green); font-weight: 700; }
   .meta .badge {
     padding: 0 6px;
-    border: 1px solid oklch(1 0 0 / 0.45);
+    border: 1px solid oklch(var(--n1000) / 0.45);
     border-radius: 3px;
     font-size: 0.6875rem;
     font-weight: 700;
@@ -859,9 +857,9 @@
     padding: 6px 12px 6px 6px;
     border-radius: 999px;
     background: oklch(0.2 0.02 25 / 0.85);
-    box-shadow: inset 0 0 0 1px oklch(1 0 0 / 0.08);
+    box-shadow: inset 0 0 0 1px oklch(var(--n1000) / 0.08);
     font-size: 0.875rem;
-    color: oklch(0.9 0.004 25);
+    color: oklch(var(--n900));
     transition: background 200ms var(--ease-out);
   }
   .fresh:hover { background: oklch(0.26 0.03 25 / 0.95); }
@@ -895,15 +893,15 @@
     border-radius: 6px;
     font-size: 1.0625rem;
     font-weight: 700;
-    transition: background 200ms var(--ease-out), transform 120ms var(--ease-out);
+    transition: background 200ms var(--ease-out);
   }
   .btn-play :global(svg),
   .btn-secondary :global(svg) { width: 26px; height: 26px; }
   .btn-play small { font-size: 0.875rem; font-weight: 600; opacity: 0.7; }
-  .btn-play { background: var(--color-text); color: oklch(0.14 0.004 25); }
-  .btn-play:hover:not(:disabled) { background: oklch(0.85 0.004 25); }
-  .btn-secondary { background: oklch(0.55 0.004 25 / 0.55); color: var(--color-text); }
-  .btn-secondary:hover { background: oklch(0.55 0.004 25 / 0.38); }
+  .btn-play { background: var(--color-text); color: oklch(var(--n140)); }
+  .btn-play:hover:not(:disabled) { background: oklch(var(--n850)); }
+  .btn-secondary { background: oklch(var(--n550) / 0.55); color: var(--color-text); }
+  .btn-secondary:hover { background: oklch(var(--n550) / 0.38); }
   .btn-play:active, .btn-secondary:active, .btn-round:active { transform: scale(0.96); }
   .btn-play:focus-visible, .btn-secondary:focus-visible, .btn-round:focus-visible {
     outline: 2px solid var(--color-text);
@@ -917,13 +915,13 @@
     display: grid;
     place-items: center;
     border-radius: 50%;
-    background: oklch(0.16 0.004 25 / 0.6);
-    box-shadow: inset 0 0 0 2px oklch(1 0 0 / 0.5);
+    background: oklch(var(--n160) / 0.6);
+    box-shadow: inset 0 0 0 2px oklch(var(--n1000) / 0.5);
     color: var(--color-text);
-    transition: box-shadow 200ms var(--ease-out), background 200ms var(--ease-out), transform 120ms var(--ease-out);
+    transition: box-shadow 200ms var(--ease-out), background 200ms var(--ease-out);
   }
   .btn-round > :global(svg) { width: 24px; height: 24px; }
-  .btn-round:hover { box-shadow: inset 0 0 0 2px var(--color-text); background: oklch(0.25 0.005 25 / 0.7); }
+  .btn-round:hover { box-shadow: inset 0 0 0 2px var(--color-text); background: oklch(var(--n250) / 0.7); }
   .btn-round.on { box-shadow: inset 0 0 0 2px var(--color-text); }
 
   .btn-round[data-tip]::after {
@@ -935,26 +933,25 @@
     padding: 6px 10px;
     border-radius: 4px;
     background: var(--color-text);
-    color: oklch(0.14 0.004 25);
+    color: oklch(var(--n140));
     font-size: 0.8125rem;
     font-weight: 700;
     white-space: nowrap;
-    opacity: 0;
+    visibility: hidden;
     pointer-events: none;
-    transition: opacity 150ms var(--ease-out), transform 150ms var(--ease-out);
   }
   .btn-round:hover::after,
-  .btn-round:focus-visible::after { opacity: 1; transform: translate(-50%, 0); }
+  .btn-round:focus-visible::after { visibility: visible; transform: translate(-50%, 0); }
 
   .ring { position: absolute; inset: 3px; width: calc(100% - 6px) !important; height: calc(100% - 6px) !important; transform: rotate(-90deg); }
-  .ring circle { fill: none; stroke: oklch(1 0 0 / 0.15); stroke-width: 3; }
+  .ring circle { fill: none; stroke: oklch(var(--n1000) / 0.15); stroke-width: 3; }
   .ring .ring-fill { stroke: var(--color-accent); stroke-dasharray: 94.2; transition: stroke-dashoffset 400ms var(--ease-out); }
   .pct { font-size: 0.75rem; font-weight: 800; font-variant-numeric: tabular-nums; }
 
   .plot {
     font-size: 1.125rem;
     line-height: 1.55;
-    color: oklch(0.92 0.004 25);
+    color: oklch(var(--n920));
     max-width: 62ch;
     text-shadow: 0 1px 14px oklch(0 0 0 / 0.5);
     display: -webkit-box;
@@ -983,7 +980,7 @@
   .credits div { display: flex; gap: 8px; }
   .credits dt { color: var(--color-text-muted); flex-shrink: 0; }
   .credits dd {
-    color: oklch(0.88 0.004 25);
+    color: oklch(var(--n880));
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -1019,29 +1016,29 @@
     height: 42px;
     padding: 0 40px 0 16px;
     border-radius: 6px;
-    border: 1px solid oklch(1 0 0 / 0.25);
+    border: 1px solid oklch(var(--n1000) / 0.25);
     background:
       url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23eee' stroke-width='2.5'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E") no-repeat right 14px center / 14px,
-      oklch(0.22 0.005 25);
+      oklch(var(--n220));
     color: var(--color-text);
     font-size: 0.9375rem;
     font-weight: 700;
     cursor: pointer;
   }
-  .season-pick select:hover { border-color: oklch(1 0 0 / 0.5); }
+  .season-pick select:hover { border-color: oklch(var(--n1000) / 0.5); }
   .season-pick select:focus-visible { outline: 2px solid var(--color-text); outline-offset: 2px; }
   .season-one { font-size: 0.9375rem; font-weight: 700; color: var(--color-text-muted); }
 
-  .ep-list { list-style: none; border-top: 1px solid oklch(1 0 0 / 0.08); }
+  .ep-list { list-style: none; border-top: 1px solid oklch(var(--n1000) / 0.08); }
 
   .ep {
     display: flex;
     align-items: center;
-    border-bottom: 1px solid oklch(1 0 0 / 0.08);
+    border-bottom: 1px solid oklch(var(--n1000) / 0.08);
     border-radius: 6px;
     transition: background 200ms var(--ease-out);
   }
-  .ep:hover, .ep.current { background: oklch(1 0 0 / 0.045); }
+  .ep:hover, .ep.current { background: oklch(var(--n1000) / 0.045); }
 
   .ep-main {
     flex: 1;
@@ -1082,8 +1079,7 @@
     display: grid;
     place-items: center;
     background: oklch(0 0 0 / 0.35);
-    opacity: 0;
-    transition: opacity 200ms var(--ease-out);
+    visibility: hidden;
   }
   .ep-play :global(svg) {
     width: 40px;
@@ -1094,7 +1090,7 @@
     background: oklch(0 0 0 / 0.5);
     color: var(--color-text);
   }
-  .ep-main:hover .ep-play, .ep-main:focus-visible .ep-play { opacity: 1; }
+  .ep-main:hover .ep-play, .ep-main:focus-visible .ep-play { visibility: visible; }
 
   .ep-bar {
     position: absolute;
@@ -1140,7 +1136,7 @@
     border-radius: 50%;
     background: none;
     color: var(--color-text-muted);
-    box-shadow: inset 0 0 0 1.5px oklch(1 0 0 / 0.25);
+    box-shadow: inset 0 0 0 1.5px oklch(var(--n1000) / 0.25);
     transition: color 200ms var(--ease-out), box-shadow 200ms var(--ease-out);
   }
   .ep-dl > :global(svg) { width: 20px; height: 20px; }
@@ -1186,7 +1182,7 @@
     font-size: 1.75rem;
     font-weight: 800;
     color: var(--color-text-muted);
-    box-shadow: 0 0 0 1px oklch(1 0 0 / 0.08);
+    box-shadow: 0 0 0 1px oklch(var(--n1000) / 0.08);
   }
   .face img { width: 100%; height: 100%; object-fit: cover; }
   .person b { font-size: 0.8125rem; font-weight: 700; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -1216,11 +1212,13 @@
     border-radius: 6px;
     overflow: hidden;
     background: var(--color-card);
-    transition: transform 240ms var(--ease-out), box-shadow 240ms var(--ease-out);
+    position: relative;
+    top: 0;
+    transition: top 220ms var(--ease-out), box-shadow 220ms var(--ease-out);
   }
   .more-art img { width: 100%; height: 100%; object-fit: cover; display: block; }
   .more-card:hover .more-art {
-    transform: translateY(-4px) scale(1.03);
+    top: -4px;
     box-shadow: 0 18px 40px -12px oklch(0 0 0 / 0.8);
   }
   .more-empty {
@@ -1267,10 +1265,14 @@
 
   .sk {
     border-radius: 4px;
-    background: linear-gradient(90deg, oklch(1 0 0 / 0.05) 0%, oklch(1 0 0 / 0.1) 50%, oklch(1 0 0 / 0.05) 100%);
+    background: linear-gradient(90deg, oklch(var(--n1000) / 0.05) 0%, oklch(var(--n1000) / 0.1) 50%, oklch(var(--n1000) / 0.05) 100%);
     background-size: 200% 100%;
-    animation: shimmer 1.6s linear infinite;
+    /* Hidden for the first 160ms: fast loads go straight to content instead of
+       flashing a skeleton for a frame or two */
+    visibility: hidden;
+    animation: shimmer 1.6s linear infinite, sk-show 0s 160ms forwards;
   }
+  @keyframes sk-show { to { visibility: visible; } }
   .sk-row { display: flex; gap: 12px; margin-top: 8px; }
   @keyframes shimmer {
     from { background-position: 100% 0; }
@@ -1286,7 +1288,7 @@
     padding: 12px 20px;
     border-radius: 6px;
     background: var(--color-text);
-    color: oklch(0.14 0.004 25);
+    color: oklch(var(--n140));
     font-size: 0.9375rem;
     font-weight: 700;
     box-shadow: 0 20px 40px -12px oklch(0 0 0 / 0.7);
@@ -1298,7 +1300,7 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .sk { animation: none; }
-    .backdrop, .more-art, .ep-play { transition: none; }
+    .sk { animation: none; visibility: visible; }
+    .more-art { transition: none; }
   }
 </style>

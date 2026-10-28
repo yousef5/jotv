@@ -1,5 +1,6 @@
 <script lang="ts">
   import { page } from '$app/stores';
+  import logoMark from '$lib/assets/logo-mark.png';
   import { nowPlaying } from '$lib/stores/live';
   import { searchPalette, openSearch } from '$lib/stores/search';
 
@@ -60,7 +61,7 @@
 <nav class="sidebar">
   <div class="sidebar-top">
     <a href="/" class="logo" aria-label="JoTV home">
-      <span class="logo-j">J</span><span class="logo-tv">TV</span>
+      <img src={logoMark} alt="" />
     </a>
     <button class="nav-item" class:active={$searchPalette.open} onclick={() => openSearch()} aria-label="Search">
       <span class="nav-icon">
@@ -87,7 +88,7 @@
     flex-direction: column;
     justify-content: space-between;
     z-index: 100;
-    box-shadow: 1px 0 0 oklch(1 0 0 / 0.04);
+    box-shadow: 1px 0 0 oklch(var(--n1000) / 0.04);
   }
 
   .sidebar-top, .sidebar-bottom {
@@ -106,33 +107,15 @@
   }
 
   .logo {
-    display: flex;
-    align-items: baseline;
-    justify-content: center;
-    margin-bottom: 22px;
-    text-decoration: none;
-    transition: transform 200ms var(--ease-out);
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    margin-bottom: 18px;
+    border-radius: 12px;
   }
-
-  .logo:hover {
-    transform: scale(1.08);
-  }
-
-  .logo-j {
-    font-size: 30px;
-    font-weight: 900;
-    color: var(--color-accent);
-    line-height: 1;
-    letter-spacing: -0.04em;
-  }
-
-  .logo-tv {
-    font-size: 11px;
-    font-weight: 800;
-    color: var(--color-text);
-    line-height: 1;
-    letter-spacing: 0.04em;
-  }
+  .logo img { width: 40px; height: 40px; object-fit: contain; }
+  .logo:focus-visible { outline: 2px solid var(--color-text); outline-offset: 2px; }
 
   button.nav-item { padding: 0; background: none; }
 
@@ -151,12 +134,12 @@
 
   .nav-item:hover {
     color: var(--color-text);
-    background: oklch(1 0 0 / 0.06);
+    background: oklch(var(--n1000) / 0.06);
   }
 
   .nav-item.active {
     color: var(--color-text);
-    background: oklch(1 0 0 / 0.1);
+    background: oklch(var(--n1000) / 0.1);
   }
 
   .nav-item.active::after {
@@ -180,23 +163,22 @@
     position: absolute;
     left: calc(100% + 14px);
     top: 50%;
-    transform: translate(-4px, -50%);
+    transform: translate(0, -50%);
     padding: 6px 10px;
     border-radius: 5px;
     background: var(--color-text);
-    color: oklch(0.14 0.004 25);
+    color: oklch(var(--n140));
     font-size: 0.8125rem;
     font-weight: 700;
     white-space: nowrap;
-    opacity: 0;
+    /* Instant show/hide: WebKitGTK blinks a frame when a GPU opacity/transform transition ends */
+    visibility: hidden;
     pointer-events: none;
-    transition: opacity 120ms var(--ease-out), transform 120ms var(--ease-out);
     z-index: 200;
   }
   .nav-item:hover .nav-tip,
   .nav-item:focus-visible .nav-tip {
-    opacity: 1;
-    transform: translate(0, -50%);
+    visibility: visible;
   }
 
   .on-air {

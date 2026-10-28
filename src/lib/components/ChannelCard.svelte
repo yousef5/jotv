@@ -68,11 +68,14 @@
     overflow: hidden;
     text-align: left;
     width: 100%;
-    transition: transform var(--transition-fast), box-shadow var(--transition-fast);
+    /* Paint-only lift (top, not transform): WebKitGTK blinks when a GPU transition ends */
+    position: relative;
+    top: 0;
+    transition: top var(--transition-fast), box-shadow var(--transition-fast);
   }
 
   .channel-card:hover {
-    transform: translateY(-3px);
+    top: -3px;
     box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
   }
 
@@ -114,12 +117,12 @@
     align-items: center;
     justify-content: center;
     background: rgba(0, 0, 0, 0.5);
-    opacity: 0;
-    transition: opacity var(--transition-fast);
+    /* Instant show/hide, no opacity fade (see .channel-card) */
+    visibility: hidden;
   }
 
   .channel-card:hover .play-overlay {
-    opacity: 1;
+    visibility: visible;
   }
 
   .play-overlay :global(svg) {

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { tick, untrack } from 'svelte';
-  import { fade, scale } from 'svelte/transition';
+  import { jsFade, jsScale } from '$lib/motion';
   import { goto } from '$app/navigation';
   import { page } from '$app/stores';
   import { globalSearch, searchWarmup } from '$lib/tauri';
@@ -75,7 +75,7 @@
       searchWarmup().catch(() => {});
       if (query) run(query);
     });
-    tick().then(() => inputEl?.focus());
+    tick().then(() => inputEl?.focus({ preventScroll: true }));
     return () => overlayOpen.set(false);
   });
 
@@ -170,8 +170,8 @@
 <svelte:window onkeydown={onKey} />
 
 {#if open}
-  <div class="backdrop" transition:fade={{ duration: 140 }} onclick={closeSearch} aria-hidden="true"></div>
-  <div class="palette" role="dialog" aria-modal="true" aria-label="Search" transition:scale={{ start: 0.97, duration: 160 }}>
+  <div class="backdrop" transition:jsFade={{ duration: 140 }} onclick={closeSearch} aria-hidden="true"></div>
+  <div class="palette" role="dialog" aria-modal="true" aria-label="Search" transition:jsScale={{ start: 0.97, duration: 160 }}>
     <label class="field">
       {#if loading}
         <span class="spinner" aria-hidden="true"></span>
@@ -191,7 +191,7 @@
         dir="auto"
       />
       {#if query}
-        <button class="clear" onclick={() => { query = ''; result = null; inputEl?.focus(); }} aria-label="Clear">
+        <button class="clear" onclick={() => { query = ''; result = null; inputEl?.focus({ preventScroll: true }); }} aria-label="Clear">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
         </button>
       {/if}
@@ -206,7 +206,7 @@
             aria-selected={filter === key}
             class:on={filter === key}
             disabled={key !== 'all' && !count}
-            onclick={() => { filter = key as Filter; active = 0; inputEl?.focus(); }}
+            onclick={() => { filter = key as Filter; active = 0; inputEl?.focus({ preventScroll: true }); }}
           >
             {label}<span>{nf.format(count as number)}</span>
           </button>
@@ -222,7 +222,7 @@
             <h3>Recent searches</h3>
             <div class="recent">
               {#each recent as r (r)}
-                <button onclick={() => { query = r; run(r); inputEl?.focus(); }} dir="auto">
+                <button onclick={() => { query = r; run(r); inputEl?.focus({ preventScroll: true }); }} dir="auto">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></svg>
                   {r}
                 </button>
@@ -306,9 +306,8 @@
     position: fixed;
     inset: 0;
     z-index: 900;
-    background: oklch(0.08 0.003 25 / 0.72);
-    backdrop-filter: blur(6px);
-    -webkit-backdrop-filter: blur(6px);
+    /* No backdrop-filter blur: it makes WebKitGTK repaint slowly */
+    background: oklch(var(--n80) / 0.88);
   }
 
   .palette {
@@ -322,8 +321,8 @@
     flex-direction: column;
     translate: -50% 0;
     border-radius: 16px;
-    background: oklch(0.17 0.005 25);
-    box-shadow: 0 40px 100px -20px oklch(0 0 0 / 0.9), 0 0 0 1px oklch(1 0 0 / 0.09);
+    background: oklch(var(--n170));
+    box-shadow: 0 40px 100px -20px oklch(0 0 0 / 0.9), 0 0 0 1px oklch(var(--n1000) / 0.09);
     overflow: hidden;
   }
 
@@ -334,7 +333,7 @@
     gap: 14px;
     height: 68px;
     padding: 0 18px 0 22px;
-    border-bottom: 1px solid oklch(1 0 0 / 0.07);
+    border-bottom: 1px solid oklch(var(--n1000) / 0.07);
   }
   .field > :global(svg) { width: 22px; height: 22px; flex-shrink: 0; color: var(--color-text-muted); }
   .field input {
@@ -349,11 +348,11 @@
     color: var(--color-text);
   }
   .field input:focus { border: none; }
-  .field input::placeholder { color: oklch(0.55 0.005 25); font-weight: 500; }
+  .field input::placeholder { color: oklch(var(--n550)); font-weight: 500; }
   .field kbd {
     padding: 3px 8px;
     border-radius: 5px;
-    background: oklch(1 0 0 / 0.08);
+    background: oklch(var(--n1000) / 0.08);
     color: var(--color-text-muted);
     font-family: inherit;
     font-size: 0.6875rem;
@@ -365,7 +364,7 @@
     display: grid;
     place-items: center;
     border-radius: 50%;
-    background: oklch(1 0 0 / 0.1);
+    background: oklch(var(--n1000) / 0.1);
     color: var(--color-text);
   }
   .clear :global(svg) { width: 13px; height: 13px; }
@@ -375,7 +374,7 @@
     align-items: center;
     gap: 6px;
     padding: 12px 18px;
-    border-bottom: 1px solid oklch(1 0 0 / 0.05);
+    border-bottom: 1px solid oklch(var(--n1000) / 0.05);
   }
   .filters button {
     display: inline-flex;
@@ -384,15 +383,15 @@
     height: 32px;
     padding: 0 13px;
     border-radius: 16px;
-    background: oklch(1 0 0 / 0.06);
-    color: oklch(0.85 0.004 25);
+    background: oklch(var(--n1000) / 0.06);
+    color: oklch(var(--n850));
     font-size: 0.8125rem;
     font-weight: 700;
     transition: background 120ms var(--ease-out), color 120ms var(--ease-out);
   }
   .filters button span { font-size: 0.75rem; opacity: 0.6; font-variant-numeric: tabular-nums; }
-  .filters button:hover:not(:disabled) { background: oklch(1 0 0 / 0.12); }
-  .filters button.on { background: var(--color-text); color: oklch(0.14 0.004 25); }
+  .filters button:hover:not(:disabled) { background: oklch(var(--n1000) / 0.12); }
+  .filters button.on { background: var(--color-text); color: oklch(var(--n140)); }
   .filters button:disabled { opacity: 0.35; }
   .speed { margin-left: auto; font-size: 0.6875rem; color: var(--color-text-muted); font-variant-numeric: tabular-nums; }
 
@@ -421,7 +420,7 @@
     color: var(--color-text);
     text-align: start;
   }
-  .row.active { background: oklch(1 0 0 / 0.09); box-shadow: inset 0 0 0 1px oklch(1 0 0 / 0.12); }
+  .row.active { background: oklch(var(--n1000) / 0.09); box-shadow: inset 0 0 0 1px oklch(var(--n1000) / 0.12); }
   .logo {
     flex-shrink: 0;
     width: 56px;
@@ -429,7 +428,7 @@
     display: grid;
     place-items: center;
     border-radius: 6px;
-    background: oklch(0.24 0.005 25);
+    background: oklch(var(--n240));
     font-weight: 800;
     color: var(--color-text-muted);
     overflow: hidden;
@@ -462,7 +461,9 @@
     border-radius: 8px;
     overflow: hidden;
     background: var(--color-card);
-    transition: transform 160ms var(--ease-out), box-shadow 160ms var(--ease-out);
+    /* Paint-only lift (top, not transform): WebKitGTK blinks when a GPU transition ends */
+    top: 0;
+    transition: top 160ms var(--ease-out), box-shadow 160ms var(--ease-out);
   }
   .art img { width: 100%; height: 100%; object-fit: cover; display: block; }
   .art-empty {
@@ -475,14 +476,14 @@
     font-weight: 800;
     background: radial-gradient(120% 80% at 100% 0%, oklch(0.42 0.16 27 / 0.5), transparent 60%), var(--color-card);
   }
-  .poster.active .art { transform: translateY(-3px); box-shadow: 0 0 0 2px var(--color-text), 0 16px 30px -12px oklch(0 0 0 / 0.8); }
+  .poster.active .art { top: -3px; box-shadow: 0 0 0 2px var(--color-text), 0 16px 30px -12px oklch(0 0 0 / 0.8); }
   .score {
     position: absolute;
     top: 6px;
     left: 6px;
     padding: 2px 6px;
     border-radius: 4px;
-    background: oklch(0.12 0.004 25 / 0.82);
+    background: oklch(var(--n120) / 0.82);
     font-size: 0.6875rem;
     font-weight: 800;
     color: var(--color-accent-yellow);
@@ -499,19 +500,19 @@
     height: 34px;
     padding: 0 14px 0 11px;
     border-radius: 17px;
-    background: oklch(1 0 0 / 0.07);
+    background: oklch(var(--n1000) / 0.07);
     color: var(--color-text);
     font-size: 0.8125rem;
     font-weight: 600;
   }
   .recent button :global(svg) { width: 14px; height: 14px; color: var(--color-text-muted); }
-  .recent button:hover { background: oklch(1 0 0 / 0.13); }
+  .recent button:hover { background: oklch(var(--n1000) / 0.13); }
   .recent .forget { background: none; color: var(--color-text-muted); }
   .hint { font-size: 0.875rem; color: var(--color-text-muted); line-height: 1.6; max-width: 70ch; }
   .hint b { color: var(--color-text); }
   .keys { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 4px; font-size: 0.8125rem; color: var(--color-text-muted); }
   .keys div { display: flex; align-items: center; gap: 7px; }
-  .keys dt { padding: 2px 7px; border-radius: 4px; background: oklch(1 0 0 / 0.08); color: var(--color-text); font-size: 0.6875rem; font-weight: 700; }
+  .keys dt { padding: 2px 7px; border-radius: 4px; background: oklch(var(--n1000) / 0.08); color: var(--color-text); font-size: 0.6875rem; font-weight: 700; }
 
   .none { padding: 48px 20px; display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center; }
   .none strong { font-size: 1.0625rem; }
@@ -522,7 +523,7 @@
     height: 22px;
     flex-shrink: 0;
     border-radius: 50%;
-    border: 2.5px solid oklch(1 0 0 / 0.12);
+    border: 2.5px solid oklch(var(--n1000) / 0.12);
     border-top-color: var(--color-accent);
     animation: spin 700ms linear infinite;
   }

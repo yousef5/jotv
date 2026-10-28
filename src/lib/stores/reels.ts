@@ -124,7 +124,7 @@ export const CATEGORY_COLORS = [
 export function categoryColor(cats: ReelCategory[], id: number | null): string {
   const path = categoryPath(cats, id);
   const main = path[0];
-  if (!main) return 'oklch(0.6 0.01 25)';
+  if (!main) return 'oklch(var(--n600))';
   return main.color ?? CATEGORY_COLORS[main.id % CATEGORY_COLORS.length];
 }
 

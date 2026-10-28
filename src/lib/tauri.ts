@@ -860,6 +860,30 @@ export function detectExternalPlayers(): Promise<ExternalPlayer[]> {
   return invoke<ExternalPlayer[]>('detect_external_players');
 }
 
+// ── System check ──
+
+export interface ToolStatus {
+  /** mpv, ffmpeg, ffprobe, yt-dlp, and on Linux x11 or xwayland */
+  id: string;
+  found: boolean;
+  version: string | null;
+  path: string | null;
+  /** Shipped inside JoTV (Windows) */
+  bundled: boolean;
+}
+
+export interface SystemStatus {
+  os: 'linux' | 'windows' | 'macos' | string;
+  /** os-release ID then ID_LIKE, e.g. ["cachyos", "arch"] */
+  distro: string[];
+  distro_name: string | null;
+  tools: ToolStatus[];
+}
+
+export function systemCheck(): Promise<SystemStatus> {
+  return invoke<SystemStatus>('system_check');
+}
+
 // ─── Settings Commands ───────────────────────────────────────────────────────
 
 export function getSetting(key: string): Promise<string | null> {

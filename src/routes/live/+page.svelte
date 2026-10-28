@@ -11,7 +11,7 @@
   import { CATEGORY_COLORS } from '$lib/stores/reels';
   import { onMount, tick, untrack } from 'svelte';
   import { get } from 'svelte/store';
-  import { fade } from 'svelte/transition';
+  import { jsFade } from '$lib/motion';
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
   import {
@@ -76,7 +76,8 @@
   let highlighted = $state<number | null>(null);
   let probe = $state<Record<number, 'testing' | 'ok' | 'dead'>>({});
   let groupFilter = $state('');
-  let theater = $state(readFlag('jotv.liveTheater'));
+  // Not remembered: coming back to Live TV always shows the channel list
+  let theater = $state(false);
   let showKeys = $state(false);
   let showTracks = $state(false);
   let clockNow = $state(Date.now());
@@ -94,6 +95,10 @@
   let listEl = $state<HTMLDivElement | undefined>();
   let screenEl = $state<HTMLDivElement | undefined>();
   let searchEl = $state<HTMLInputElement | undefined>();
+  let drawerEl = $state<HTMLDivElement | undefined>();
+  let filterEl = $state<HTMLInputElement | undefined>();
+  let catListEl = $state<HTMLElement | undefined>();
+  let catsOpen = $state(false);
   let token = 0;
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -101,8 +106,13 @@
   // A movie playing elsewhere doesn't belong on this page
   let liveNow = $derived($nowPlaying?.kind === 'live' ? $nowPlaying : null);
   let shown = $derived(results ?? channels);
-  // The stage shows what's playing (its screen holds the video); otherwise the highlighted channel
-  let current = $derived(liveNow?.channel ?? shown.find((c) => c.id === highlighted) ?? null);
+  // The stage shows what's playing (its screen holds the video); otherwise the highlighted
+  // channel, or the first one in the list so the stage is never an empty page
+  let current = $derived(liveNow?.channel ?? shown.find((c) => c.id === highlighted) ?? shown[0] ?? null);
+  // The row the keyboard is on: what you moved to, else what's on stage
+  let focusId = $derived(highlighted !== null && shown.some((c) => c.id === highlighted) ? highlighted : (current?.id ?? null));
+  // Showing one of the provider's categories (not favorites, recent or a search)
+  let inGroup = $derived(view !== FAVORITES && view !== RECENT && !view.startsWith(FAV_LIST));
   let embedded = $derived(!!liveNow?.embedded);
   let isPlayingCurrent = $derived(!!current && liveNow?.channel.id === current.id);
   // All favorites shown under your category headings
@@ -124,13 +134,48 @@
   let behind = $derived(isPlayingCurrent && $liveStatus === 'live' && $liveBehind > BEHIND_LIMIT);
   let chNumber = $derived(current ? strip.findIndex((c) => c.id === current!.id) + 1 : 0);
 
-  function readFlag(key: string): boolean {
-    try { return localStorage.getItem(key) === '1'; } catch { return false; }
+  // The drawer slides by rAF, not a CSS transition: when an accelerated transition
+  // ends, WebKitGTK paints one frame at the start position and the drawer blinks.
+  const DRAWER_MS = 200;
+  let drawerPos = 0; // 0 = hidden, 1 = open
+  let drawerRaf = 0;
+  $effect(() => {
+    const target = catsOpen ? 1 : 0;
+    const el = drawerEl;
+    if (!el) return;
+    cancelAnimationFrame(drawerRaf);
+    const from = drawerPos;
+    if (from === target) return;
+    const t0 = performance.now();
+    const step = (now: number) => {
+      const k = Math.min(1, (now - t0) / (DRAWER_MS * Math.abs(target - from)));
+      const eased = 1 - Math.pow(1 - k, 3);
+      drawerPos = from + (target - from) * eased;
+      el.style.transform = `translate3d(${(drawerPos - 1) * 101}%, 0, 0)`;
+      if (k < 1) drawerRaf = requestAnimationFrame(step);
+    };
+    drawerRaf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(drawerRaf);
+  });
+
+  async function openCats() {
+    catsOpen = true;
+    groupFilter = '';
+    await tick();
+    // Show the open category: scroll the list itself, never scrollIntoView
+    const on = catListEl?.querySelector<HTMLElement>('.cat.on');
+    if (catListEl) catListEl.scrollTop = on ? on.offsetTop - catListEl.clientHeight / 2 : 0;
+    // preventScroll: a plain focus() makes WebKit scroll the half-slid drawer into view
+    filterEl?.focus({ preventScroll: true });
+  }
+
+  function pickGroup(name: string) {
+    catsOpen = false;
+    openView(name);
   }
 
   function toggleTheater() {
     theater = !theater;
-    try { localStorage.setItem('jotv.liveTheater', theater ? '1' : '0'); } catch {}
   }
 
   // A channel that won't play may mean every connection is in use: re-check the account
@@ -317,7 +362,7 @@
     query = '';
     results = null;
     clearTimeout(searchTimer);
-    if (focus) searchEl?.focus();
+    if (focus) searchEl?.focus({ preventScroll: true });
   }
 
   // ── Playback ────────────────────────────────────────────────────────────────
@@ -341,7 +386,7 @@
   function move(dir: 1 | -1) {
     const list = shown;
     if (!list.length) return;
-    const i = list.findIndex((c) => c.id === highlighted);
+    const i = list.findIndex((c) => c.id === focusId);
     const next = list[Math.min(list.length - 1, Math.max(0, i === -1 ? 0 : i + dir))];
     highlighted = next.id;
     scrollToHighlighted();
@@ -350,7 +395,12 @@
 
   async function scrollToHighlighted() {
     await tick();
-    listEl?.querySelector<HTMLElement>(`[data-id="${highlighted}"]`)?.scrollIntoView({ block: 'nearest' });
+    // Scroll the list itself: scrollIntoView would also nudge the page around it
+    const row = listEl?.querySelector<HTMLElement>(`[data-id="${highlighted}"]`);
+    if (!listEl || !row) return;
+    const top = row.offsetTop;
+    if (top < listEl.scrollTop + 8) listEl.scrollTop = top - 8;
+    else if (top + row.offsetHeight > listEl.scrollTop + listEl.clientHeight - 8) listEl.scrollTop = top + row.offsetHeight - listEl.clientHeight + 8;
   }
 
   async function toggleFav(ch: Channel, anchor?: EventTarget | null) {
@@ -397,12 +447,22 @@
 
   function onKey(e: KeyboardEvent) {
     const inSearch = e.target === searchEl;
+    if (e.key === 'Escape' && catsOpen) {
+      e.preventDefault();
+      catsOpen = false;
+      return;
+    }
     const typing = (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) && !inSearch;
     if (typing) return;
+    if (!inSearch && e.key === 'g') {
+      e.preventDefault();
+      catsOpen ? (catsOpen = false) : openCats();
+      return;
+    }
 
     if ((e.key === 'k' && (e.ctrlKey || e.metaKey)) || (e.key === '/' && !inSearch)) {
       e.preventDefault();
-      searchEl?.focus();
+      searchEl?.focus({ preventScroll: true });
       searchEl?.select();
     } else if (e.key === 'ArrowDown' && !e.ctrlKey) {
       e.preventDefault();
@@ -417,13 +477,15 @@
       e.preventDefault();
       zap(-1);
     } else if (e.key === 'Enter') {
-      const ch = shown.find((c) => c.id === highlighted);
-      if (ch) { e.preventDefault(); play(ch); }
+      const ch = shown.find((c) => c.id === focusId);
+      if (ch && ch.id !== liveNow?.channel.id) { e.preventDefault(); play(ch); }
     } else if (e.key === 'Escape' && inSearch && query) {
       e.preventDefault();
       clearSearch();
     } else if (e.key === 'Escape' && showKeys) {
       showKeys = false;
+    } else if (e.key === 'Escape' && theater) {
+      theater = false;
     } else if (!inSearch && e.key === 't') {
       toggleTheater();
     } else if (!inSearch && e.key === '?') {
@@ -447,77 +509,71 @@
 
 <svelte:window onkeydown={onKey} />
 
-<div class="live-page" class:theater>
-  <!-- Categories -->
-  <aside class="cats">
-    <header class="cats-head">
-      <h1>Live TV</h1>
-      {#if $playlists.length > 1}
-        <select class="pl-select" value={pid} onchange={(e) => switchPlaylist(+(e.currentTarget as HTMLSelectElement).value)} aria-label="Playlist">
-          {#each $playlists as p (p.id)}<option value={p.id}>{p.name}</option>{/each}
-        </select>
-      {:else if playlist}
-        <p class="pl-name">{playlist.name} · {nf.format(totalLive)} channels</p>
-      {/if}
-    </header>
-
-    <nav class="cat-list" aria-label="Categories">
-      <button class="cat special" class:on={view === FAVORITES && !results} onclick={() => openView(FAVORITES)}>
-        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 21s-7.5-4.6-9.6-9.4C.9 8.1 3.2 4.5 6.9 4.5c2.1 0 3.6 1.1 5.1 3 1.5-1.9 3-3 5.1-3 3.7 0 6 3.6 4.5 7.1C19.5 16.4 12 21 12 21z"/></svg>
-        <span class="cat-name">Favorites</span>
-        <span class="cat-count">{favChannels.length}</span>
-      </button>
-      {#each favLists as l (l.id)}
-        {@const v = `${FAV_LIST}${l.id}`}
-        <button class="cat sub" class:on={view === v && !results} onclick={() => openView(v)} title={l.name}>
-          <i class="cat-dot" style:background={listColor(l)}></i>
-          <span class="cat-name" dir="auto">{l.name}</span>
-          <span class="cat-count">{favCount(l.id)}</span>
-        </button>
-      {/each}
-      <button class="cat special" class:on={view === RECENT && !results} onclick={() => openView(RECENT)}>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15.5 14"/></svg>
-        <span class="cat-name">Recently watched</span>
-        <span class="cat-count">{recentChannels.length}</span>
-      </button>
-
-      <div class="cat-divider">
-        <span>Categories</span>
-        <input class="cat-filter" bind:value={groupFilter} placeholder="Filter" aria-label="Filter categories" />
+<!-- Theater only applies while a channel plays; otherwise it would hide the lists and leave an empty page -->
+<div class="live-page" class:theater={theater && !!liveNow}>
+  <!-- Guide: one panel for finding a channel; categories slide over it -->
+  <section class="guide">
+    <header class="guide-head">
+      <div class="title-row">
+        <h1><i class="live-dot" aria-hidden="true"></i>Live TV</h1>
+        {#if $playlists.length > 1}
+          <select class="pl-select" value={pid} onchange={(e) => switchPlaylist(+(e.currentTarget as HTMLSelectElement).value)} aria-label="Playlist">
+            {#each $playlists as p (p.id)}<option value={p.id}>{p.name}</option>{/each}
+          </select>
+        {:else if playlist}
+          <span class="pl-name">{nf.format(totalLive)} channels</span>
+        {/if}
       </div>
 
-      {#each filteredGroups as g (g.name)}
-        <button class="cat" class:on={view === g.name && !results} onclick={() => openView(g.name)} title={g.name}>
-          <span class="cat-name" dir="auto">{g.name || 'Uncategorized'}</span>
-          <span class="cat-count">{nf.format(g.count)}</span>
-        </button>
-      {/each}
-    </nav>
-  </aside>
+      <div class="search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="16.5" y1="16.5" x2="21" y2="21"/></svg>
+        <input
+          bind:this={searchEl}
+          bind:value={query}
+          oninput={onSearchInput}
+          type="search"
+          placeholder="Search all channels"
+          aria-label="Search all channels"
+          autocomplete="off"
+          spellcheck="false"
+          dir="auto"
+        />
+        {#if query}
+          <button class="clear" onclick={() => clearSearch()} aria-label="Clear search">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        {:else}
+          <kbd>Ctrl K</kbd>
+        {/if}
+      </div>
 
-  <!-- Channels -->
-  <section class="channels">
-    <div class="search">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="16.5" y1="16.5" x2="21" y2="21"/></svg>
-      <input
-        bind:this={searchEl}
-        bind:value={query}
-        oninput={onSearchInput}
-        type="search"
-        placeholder="Search all channels"
-        aria-label="Search all channels"
-        autocomplete="off"
-        spellcheck="false"
-        dir="auto"
-      />
-      {#if query}
-        <button class="clear" onclick={() => clearSearch()} aria-label="Clear search">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      <button class="cats-btn" class:on={inGroup && !results} onclick={openCats} aria-haspopup="dialog" aria-expanded={catsOpen}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" aria-hidden="true"><rect x="3.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.5"/></svg>
+        <span class="cats-btn-text">
+          <small>Category</small>
+          <b dir="auto">{inGroup ? view || 'Uncategorized' : `All ${nf.format(groups.length)} categories`}</b>
+        </span>
+        <kbd>G</kbd>
+      </button>
+
+      <div class="tabs" aria-label="Your channels">
+        <button class="tab" class:on={view === FAVORITES && !results} onclick={() => openView(FAVORITES)}>
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 21s-7.5-4.6-9.6-9.4C.9 8.1 3.2 4.5 6.9 4.5c2.1 0 3.6 1.1 5.1 3 1.5-1.9 3-3 5.1-3 3.7 0 6 3.6 4.5 7.1C19.5 16.4 12 21 12 21z"/></svg>
+          Favorites <span>{favChannels.length}</span>
         </button>
-      {:else}
-        <kbd>Ctrl K</kbd>
-      {/if}
-    </div>
+        <button class="tab" class:on={view === RECENT && !results} onclick={() => openView(RECENT)}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15.5 14"/></svg>
+          Recent <span>{recentChannels.length}</span>
+        </button>
+        {#each favLists as l (l.id)}
+          {@const v = `${FAV_LIST}${l.id}`}
+          <button class="tab" class:on={view === v && !results} onclick={() => openView(v)} title={l.name}>
+            <i class="cat-dot" style:background={listColor(l)}></i>
+            <span class="tab-name" dir="auto">{l.name}</span> <span>{favCount(l.id)}</span>
+          </button>
+        {/each}
+      </div>
+    </header>
 
     <header class="list-head">
       <h2 dir="auto">{viewTitle}</h2>
@@ -574,11 +630,11 @@
           {/if}
           <div
             class="row"
-            class:hl={highlighted === ch.id}
+            class:hl={focusId === ch.id}
             class:playing
             data-id={ch.id}
             role="option"
-            aria-selected={highlighted === ch.id}
+            aria-selected={focusId === ch.id}
           >
             <button class="row-main" onclick={() => play(ch)} onfocus={() => (highlighted = ch.id)}>
               <span class="num">{i + 1}</span>
@@ -591,7 +647,9 @@
               </span>
               <span class="row-text">
                 <span class="row-name" dir="auto">{ch.name}</span>
-                {#if results || view === FAVORITES || view === RECENT || view.startsWith(FAV_LIST)}
+                {#if playing}
+                  <span class="row-sub live-sub"><i></i>Watching now</span>
+                {:else if results || view === FAVORITES || view === RECENT || view.startsWith(FAV_LIST)}
                   <span class="row-sub" dir="auto">{ch.group_name}</span>
                 {/if}
               </span>
@@ -612,19 +670,52 @@
         {#if loadingMore}<div class="more"><span class="spinner"></span></div>{/if}
       {/if}
     </div>
+
+    <!-- Categories drawer: always mounted so it opens instantly; slid by script (see DRAWER_MS) -->
+    <div class="drawer" bind:this={drawerEl} role="dialog" aria-label="Categories" inert={!catsOpen}>
+      <header class="drawer-head">
+        <h2>Categories <span>{nf.format(groups.length)}</span></h2>
+        <button class="drawer-x" onclick={() => (catsOpen = false)} aria-label="Close categories">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </header>
+      <div class="search drawer-search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="16.5" y1="16.5" x2="21" y2="21"/></svg>
+        <input
+          bind:this={filterEl}
+          bind:value={groupFilter}
+          onkeydown={(e) => { if (e.key === 'Enter' && filteredGroups[0]) pickGroup(filteredGroups[0].name); }}
+          placeholder="Filter categories"
+          aria-label="Filter categories"
+          autocomplete="off"
+          spellcheck="false"
+          dir="auto"
+        />
+      </div>
+      <nav class="cat-list" bind:this={catListEl}>
+        {#each filteredGroups as g (g.name)}
+          <button class="cat" class:on={view === g.name && !results} onclick={() => pickGroup(g.name)} title={g.name}>
+            <span class="cat-name" dir="auto">{g.name || 'Uncategorized'}</span>
+            <span class="cat-count">{nf.format(g.count)}</span>
+          </button>
+        {:else}
+          <p class="cat-none">No category matches “{groupFilter.trim()}”</p>
+        {/each}
+      </nav>
+    </div>
   </section>
 
   <!-- Stage -->
   <section class="stage">
     {#if current}
-      {#key current.id}
-        <div class="stage-bg" aria-hidden="true" in:fade={{ duration: 400 }}>
-          {#if current.logo_url}<img src={current.logo_url} alt="" />{/if}
-        </div>
-      {/key}
-
       <div class="stage-body">
-        <div class="player">
+        <div class="player dark-zone">
+          <!-- Ambilight: the channel's colors glow around the screen -->
+          {#key current.id}
+            <div class="glow" aria-hidden="true" in:jsFade={{ duration: 500 }}>
+              {#if current.logo_url}<img src={current.logo_url} alt="" />{/if}
+            </div>
+          {/key}
           <!-- In-app playback: MPV's native surface is placed exactly over this box -->
           <div class="screen" class:video={isPlayingCurrent && embedded} bind:this={screenEl}>
             {#if current.logo_url}
@@ -634,12 +725,22 @@
             {/if}
             {#if !isPlayingCurrent}
               <button class="screen-play" onclick={() => play(current!)} aria-label={`Watch ${current.name}`}>
-                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.14v13.72a1 1 0 001.5.86l11-6.86a1 1 0 000-1.72l-11-6.86A1 1 0 008 5.14z"/></svg>
+                <span class="watch-cta">
+                  <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.14v13.72a1 1 0 001.5.86l11-6.86a1 1 0 000-1.72l-11-6.86A1 1 0 008 5.14z"/></svg>
+                  Watch now
+                  <kbd>Enter</kbd>
+                </span>
               </button>
             {/if}
           </div>
 
           <div class="bar" role="toolbar" aria-label="Player controls">
+            {#if theater && liveNow}
+              <button class="channels-btn" onclick={toggleTheater} title="Show the channel list · Esc">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="14" y2="18"/></svg>
+                Channels
+              </button>
+            {/if}
             {#if isPlayingCurrent}
               <button class="ib" onclick={() => mpvPause()} aria-label="Pause or resume" data-tip="Pause · Space">
                 <svg viewBox="0 0 24 24" fill="currentColor"><rect x="6.5" y="5" width="4" height="14" rx="1"/><rect x="13.5" y="5" width="4" height="14" rx="1"/></svg>
@@ -735,10 +836,10 @@
           </div>
 
           {#if showTracks && isPlayingCurrent}
-            <div class="track-wrap" transition:fade={{ duration: 120 }}><TrackPanel /></div>
+            <div class="track-wrap" transition:jsFade={{ duration: 120 }}><TrackPanel /></div>
           {/if}
           {#if showKeys}
-            <dl class="keys" transition:fade={{ duration: 120 }} aria-label="Keyboard shortcuts">
+            <dl class="keys" transition:jsFade={{ duration: 120 }} aria-label="Keyboard shortcuts">
               <div><dt>↑ ↓</dt><dd>Move in list</dd></div>
               <div><dt>Enter</dt><dd>Watch</dd></div>
               <div><dt>PgUp PgDn</dt><dd>Previous / next channel</dd></div>
@@ -747,11 +848,12 @@
               <div><dt>M</dt><dd>Mute</dd></div>
               <div><dt>L</dt><dd>Go live</dd></div>
               <div><dt>R</dt><dd>Reload stream</dd></div>
-              <div><dt>T</dt><dd>Theater</dd></div>
+              <div><dt>T · Esc</dt><dd>Theater on / off</dd></div>
               <div><dt>F</dt><dd>Fullscreen</dd></div>
               <div><dt>C</dt><dd>Audio & subtitles</dd></div>
               <div><dt>[ ]</dt><dd>Sound earlier / later</dd></div>
               <div><dt>Ctrl K</dt><dd>Search</dd></div>
+              <div><dt>G</dt><dd>Categories</dd></div>
             </dl>
           {/if}
         </div>
@@ -824,7 +926,7 @@
             {/if}
           </div>
         {:else if isPlayingCurrent && $streamGuard.notice}
-          <div class="guard ok" role="status" transition:fade={{ duration: 150 }}>
+          <div class="guard ok" role="status" transition:jsFade={{ duration: 150 }}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="5 12.5 10 17 19 7"/></svg>
             <p>{$streamGuard.notice}</p>
           </div>
@@ -892,151 +994,79 @@
     margin: -24px;
     height: 100vh;
     display: grid;
-    grid-template-columns: minmax(200px, 240px) minmax(280px, 360px) minmax(0, 1fr);
+    grid-template-columns: minmax(330px, 400px) minmax(0, 1fr);
     overflow: hidden;
   }
 
-  /* ── Categories ─────────────────────────────────────────────────────── */
+  /* ── Guide ──────────────────────────────────────────────────────────── */
 
-  .cats {
+  .guide {
+    position: relative;
     display: flex;
     flex-direction: column;
     min-height: 0;
-    background: oklch(0.145 0.004 25);
-    box-shadow: 1px 0 0 oklch(1 0 0 / 0.05);
+    overflow: hidden;
+    background: oklch(var(--n135));
+    box-shadow: 1px 0 0 oklch(var(--n1000) / 0.06);
   }
 
-  .cats-head {
-    padding: 26px 20px 14px;
+  .guide-head {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 12px;
+    padding: 24px 16px 6px;
   }
-  .cats-head h1 {
-    font-size: 1.75rem;
+  .title-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 0 4px;
+  }
+  .title-row h1 {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 1.625rem;
     font-weight: 900;
     letter-spacing: -0.03em;
   }
+  .live-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--color-accent);
+    box-shadow: 0 0 0 4px oklch(0.58 0.225 27 / 0.25);
+  }
   .pl-name {
     font-size: 0.8125rem;
+    font-weight: 600;
     color: var(--color-text-muted);
     font-variant-numeric: tabular-nums;
   }
   .pl-select {
-    height: 34px;
+    max-width: 170px;
+    height: 32px;
     padding: 0 10px;
     font-size: 0.8125rem;
     font-weight: 600;
-    background: oklch(1 0 0 / 0.06);
-    border-color: oklch(1 0 0 / 0.1);
-  }
-
-  .cat-list {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-    padding: 0 10px 24px;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-
-  .cat {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    min-height: 40px;
-    padding: 0 12px;
-    border-radius: 8px;
-    background: none;
-    color: oklch(0.82 0.004 25);
-    font-size: 0.875rem;
-    font-weight: 500;
-    text-align: start;
-    transition: background 150ms var(--ease-out), color 150ms var(--ease-out);
-  }
-  .cat:hover { background: oklch(1 0 0 / 0.05); color: var(--color-text); }
-  .cat:focus-visible { outline: 2px solid var(--color-text); outline-offset: -2px; }
-  .cat.on { background: oklch(1 0 0 / 0.1); color: var(--color-text); font-weight: 700; }
-  .cat.special :global(svg) { width: 17px; height: 17px; flex-shrink: 0; color: var(--color-accent); }
-  .cat-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  /* Your favorite categories, tucked under Favorites */
-  .cat.sub { min-height: 34px; padding-left: 40px; font-size: 0.8125rem; }
-  .cat-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; }
-  .fav-head {
-    position: sticky;
-    top: 0;
-    z-index: 1;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 12px 12px 6px;
-    background: var(--color-base);
-    font-size: 0.6875rem;
-    font-weight: 800;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: var(--color-text-muted);
-  }
-  .fav-head button { background: none; color: var(--color-text); font: inherit; letter-spacing: inherit; text-transform: none; font-size: 0.8125rem; }
-  .fav-head button:hover { text-decoration: underline; text-underline-offset: 3px; }
-  .cat-count {
-    flex-shrink: 0;
-    font-size: 0.75rem;
-    font-weight: 600;
-    color: var(--color-text-muted);
-    font-variant-numeric: tabular-nums;
-  }
-
-  .cat-divider {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-    margin: 16px 2px 6px 12px;
-    font-size: 0.6875rem;
-    font-weight: 800;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    color: var(--color-text-muted);
-  }
-  .cat-filter {
-    width: 96px;
-    height: 28px;
-    padding: 0 9px;
-    border-radius: 6px;
-    font-size: 0.75rem;
-    letter-spacing: 0;
-    text-transform: none;
-    background: oklch(1 0 0 / 0.05);
-    border: 1px solid transparent;
-    transition: width 200ms var(--ease-out), border-color 150ms var(--ease-out);
-  }
-  .cat-filter:focus { width: 130px; border-color: oklch(1 0 0 / 0.3); }
-
-  /* ── Channels ───────────────────────────────────────────────────────── */
-
-  .channels {
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-    background: var(--color-base);
-    box-shadow: 1px 0 0 oklch(1 0 0 / 0.05);
+    background: oklch(var(--n1000) / 0.06);
+    border-color: oklch(var(--n1000) / 0.1);
   }
 
   .search {
     position: relative;
     display: flex;
     align-items: center;
-    margin: 22px 16px 10px;
+    flex-shrink: 0;
     height: 44px;
     padding: 0 10px 0 42px;
-    border-radius: 8px;
-    background: oklch(1 0 0 / 0.06);
-    box-shadow: inset 0 0 0 1px oklch(1 0 0 / 0.08);
+    border-radius: 10px;
+    background: oklch(var(--n1000) / 0.06);
+    box-shadow: inset 0 0 0 1px oklch(var(--n1000) / 0.08);
     transition: box-shadow 150ms var(--ease-out), background 150ms var(--ease-out);
   }
-  .search:focus-within { background: oklch(0.12 0.004 25); box-shadow: inset 0 0 0 2px var(--color-text); }
+  .search:focus-within { background: oklch(var(--n110)); box-shadow: inset 0 0 0 2px var(--color-text); }
   .search > :global(svg) { position: absolute; left: 14px; width: 18px; height: 18px; color: var(--color-text-muted); }
   .search input {
     flex: 1;
@@ -1048,10 +1078,11 @@
     font-size: 0.9375rem;
   }
   .search input::-webkit-search-cancel-button { display: none; }
-  .search kbd {
+  kbd {
+    flex-shrink: 0;
     padding: 2px 7px;
     border-radius: 4px;
-    background: oklch(1 0 0 / 0.08);
+    background: oklch(var(--n1000) / 0.08);
     color: var(--color-text-muted);
     font-family: inherit;
     font-size: 0.6875rem;
@@ -1063,17 +1094,169 @@
     display: grid;
     place-items: center;
     border-radius: 50%;
-    background: oklch(1 0 0 / 0.1);
+    background: oklch(var(--n1000) / 0.1);
     color: var(--color-text);
   }
   .clear :global(svg) { width: 13px; height: 13px; }
+
+  /* Opens the categories drawer; shows which one you're in */
+  .cats-btn {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    height: 54px;
+    padding: 0 12px 0 14px;
+    border-radius: 10px;
+    background: oklch(var(--n1000) / 0.04);
+    box-shadow: inset 0 0 0 1px oklch(var(--n1000) / 0.08);
+    color: var(--color-text);
+    text-align: start;
+    transition: background 150ms var(--ease-out), box-shadow 150ms var(--ease-out);
+  }
+  .cats-btn > :global(svg) { width: 20px; height: 20px; flex-shrink: 0; color: var(--color-text-muted); }
+  .cats-btn:hover { background: oklch(var(--n1000) / 0.08); }
+  .cats-btn:focus-visible { outline: 2px solid var(--color-text); outline-offset: 2px; }
+  .cats-btn.on { box-shadow: inset 0 0 0 1px oklch(0.58 0.225 27 / 0.6); background: oklch(0.58 0.225 27 / 0.1); }
+  .cats-btn.on > :global(svg) { color: var(--color-accent-soft); }
+  .cats-btn-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+  .cats-btn-text small {
+    font-size: 0.6875rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--color-text-muted);
+  }
+  .cats-btn-text b {
+    font-size: 0.9375rem;
+    font-weight: 700;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .tabs { display: flex; flex-wrap: wrap; gap: 6px; }
+  .tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    max-width: 100%;
+    height: 32px;
+    padding: 0 12px;
+    border-radius: 16px;
+    background: oklch(var(--n1000) / 0.06);
+    color: oklch(var(--n850));
+    font-size: 0.8125rem;
+    font-weight: 600;
+    white-space: nowrap;
+    transition: background 150ms var(--ease-out), color 150ms var(--ease-out);
+  }
+  .tab > :global(svg) { width: 14px; height: 14px; flex-shrink: 0; color: var(--color-accent); }
+  .tab > span:last-child { color: var(--color-text-muted); font-size: 0.75rem; font-variant-numeric: tabular-nums; }
+  .tab-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .tab:hover { background: oklch(var(--n1000) / 0.11); color: var(--color-text); }
+  .tab:focus-visible { outline: 2px solid var(--color-text); outline-offset: 2px; }
+  .tab.on { background: var(--color-text); color: oklch(var(--n140)); font-weight: 700; }
+  .tab.on > span:last-child { color: oklch(var(--n400)); }
+  .cat-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; }
+
+  .fav-head {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 12px 6px;
+    background: oklch(var(--n135));
+    font-size: 0.6875rem;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--color-text-muted);
+  }
+  .fav-head button { background: none; color: var(--color-text); font: inherit; letter-spacing: inherit; text-transform: none; font-size: 0.8125rem; }
+  .fav-head button:hover { text-decoration: underline; text-underline-offset: 3px; }
+
+  /* ── Categories drawer ──────────────────────────────────────────────── */
+
+  .drawer {
+    position: absolute;
+    inset: 0;
+    z-index: 5;
+    display: flex;
+    flex-direction: column;
+    background: oklch(var(--n155));
+    box-shadow: 1px 0 0 oklch(var(--n1000) / 0.08);
+    /* Starts off-canvas; slid from script (see DRAWER_MS) */
+    transform: translate3d(-101%, 0, 0);
+    will-change: transform;
+  }
+  .drawer-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 22px 14px 12px 20px;
+  }
+  .drawer-head h2 { font-size: 1.25rem; font-weight: 800; letter-spacing: -0.02em; }
+  .drawer-head h2 span { margin-left: 6px; font-size: 0.875rem; font-weight: 600; color: var(--color-text-muted); }
+  .drawer-x {
+    width: 34px;
+    height: 34px;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    background: none;
+    color: var(--color-text-muted);
+  }
+  .drawer-x :global(svg) { width: 16px; height: 16px; }
+  .drawer-x:hover { background: oklch(var(--n1000) / 0.08); color: var(--color-text); }
+  .drawer-search { margin: 0 16px 10px; }
+
+  .cat-list {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 0 10px 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .cat {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 42px;
+    padding: 0 12px;
+    border-radius: 8px;
+    background: none;
+    color: oklch(var(--n840));
+    font-size: 0.875rem;
+    font-weight: 500;
+    text-align: start;
+    transition: background 150ms var(--ease-out), color 150ms var(--ease-out);
+  }
+  .cat:hover { background: oklch(var(--n1000) / 0.06); color: var(--color-text); }
+  .cat:focus-visible { outline: 2px solid var(--color-text); outline-offset: -2px; }
+  .cat.on { background: oklch(0.58 0.225 27 / 0.18); color: var(--color-text); font-weight: 700; }
+  .cat-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cat-count {
+    flex-shrink: 0;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--color-text-muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .cat-none { padding: 24px 12px; color: var(--color-text-muted); font-size: 0.875rem; }
+
+  /* ── Channels ───────────────────────────────────────────────────────── */
 
   .list-head {
     display: flex;
     align-items: baseline;
     justify-content: space-between;
     gap: 12px;
-    padding: 6px 20px 10px;
+    padding: 14px 20px 8px;
   }
   .list-head h2 {
     font-size: 1rem;
@@ -1090,6 +1273,7 @@
   }
 
   .list {
+    position: relative;
     flex: 1;
     min-height: 0;
     overflow-y: auto;
@@ -1104,9 +1288,9 @@
     border-radius: 8px;
     transition: background 120ms var(--ease-out);
   }
-  .row:hover { background: oklch(1 0 0 / 0.045); }
-  .row.hl { background: oklch(1 0 0 / 0.09); }
-  .row.playing { background: oklch(0.58 0.225 27 / 0.16); }
+  .row:hover { background: oklch(var(--n1000) / 0.045); }
+  .row.hl { background: oklch(var(--n1000) / 0.09); }
+  .row.playing { background: oklch(0.58 0.225 27 / 0.16); box-shadow: inset 3px 0 0 var(--color-accent); }
   .row.playing.hl { background: oklch(0.58 0.225 27 / 0.24); }
 
   .row-main {
@@ -1142,7 +1326,7 @@
     display: grid;
     place-items: center;
     border-radius: 6px;
-    background: oklch(0.24 0.005 25);
+    background: oklch(var(--n240));
     overflow: hidden;
   }
   .logo img { width: 100%; height: 100%; object-fit: contain; padding: 5px; }
@@ -1157,6 +1341,8 @@
     text-overflow: ellipsis;
   }
   .playing .row-name { font-weight: 800; }
+  .live-sub { display: inline-flex; align-items: center; gap: 6px; color: var(--color-accent-soft) !important; font-weight: 700; }
+  .live-sub i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
   .row-sub {
     font-size: 0.75rem;
     color: var(--color-text-muted);
@@ -1181,12 +1367,14 @@
     border-radius: 50%;
     background: none;
     color: var(--color-text-muted);
+    /* Shown instantly (no opacity transition: WebKitGTK blinks a frame when one ends);
+       opacity rather than visibility keeps it reachable with Tab */
     opacity: 0;
-    transition: opacity 120ms var(--ease-out), color 120ms var(--ease-out), background 120ms var(--ease-out);
+    transition: color 120ms var(--ease-out), background 120ms var(--ease-out);
   }
   .row-fav :global(svg) { width: 18px; height: 18px; }
   .row:hover .row-fav, .row.hl .row-fav, .row-fav.on, .row-fav:focus-visible { opacity: 1; }
-  .row-fav:hover { background: oklch(1 0 0 / 0.08); color: var(--color-text); }
+  .row-fav:hover { background: oklch(var(--n1000) / 0.08); color: var(--color-text); }
   .row-fav.on { color: var(--color-accent); }
 
   .empty {
@@ -1204,40 +1392,34 @@
 
   /* ── Stage ──────────────────────────────────────────────────────────── */
 
-  .live-page.theater { grid-template-columns: 0 0 minmax(0, 1fr); }
+  .live-page.theater { grid-template-columns: 0 minmax(0, 1fr); }
   .live-page.theater .stage-body { margin-inline: auto; align-items: center; }
   .live-page.theater .player,
   .live-page.theater .info,
   .live-page.theater .strip { width: min(100%, calc((100vh - 200px) * 16 / 9)); }
-  .live-page.theater .cats,
-  .live-page.theater .channels { visibility: hidden; }
+  .live-page.theater .guide { visibility: hidden; }
 
   .stage {
     position: relative;
     min-height: 0;
     overflow: hidden auto;
     isolation: isolate;
+    background: radial-gradient(90% 60% at 40% 0%, oklch(var(--n200)), var(--color-base) 70%);
   }
 
-  .stage-bg {
+  /* Ambilight: the channel logo, blurred, glowing out from behind the screen */
+  .glow {
     position: absolute;
-    inset: 0;
+    inset: -6% -4%;
     z-index: -1;
-    overflow: hidden;
+    pointer-events: none;
   }
-  .stage-bg img {
+  .glow img {
     width: 100%;
     height: 100%;
     object-fit: cover;
-    filter: blur(110px) saturate(1.8) brightness(0.4);
-    transform: scale(1.6);
-    opacity: 0.5;
-  }
-  .stage-bg::after {
-    content: '';
-    position: absolute;
-    inset: 0;
-    background: linear-gradient(to bottom, transparent 30%, var(--color-base) 85%);
+    filter: blur(90px) saturate(1.7) brightness(0.75);
+    opacity: 0.45;
   }
 
   .stage-body {
@@ -1250,10 +1432,11 @@
 
   /* Player: screen + attached control bar */
   .player {
+    position: relative;
     width: min(100%, calc((100vh - 330px) * 16 / 9));
     border-radius: 12px;
-    background: oklch(0.13 0.004 25);
-    box-shadow: 0 40px 80px -30px oklch(0 0 0 / 0.85), 0 0 0 1px oklch(1 0 0 / 0.07);
+    background: oklch(var(--n130));
+    box-shadow: 0 40px 80px -30px oklch(0 0 0 / 0.85), 0 0 0 1px oklch(var(--n1000) / 0.07);
   }
 
   .screen {
@@ -1263,10 +1446,10 @@
     display: grid;
     place-items: center;
     border-radius: 12px 12px 0 0;
-    background: radial-gradient(80% 80% at 50% 40%, oklch(0.28 0.006 25), oklch(0.15 0.004 25));
+    background: radial-gradient(80% 80% at 50% 40%, oklch(var(--n280)), oklch(var(--n150)));
     overflow: hidden;
   }
-  .screen.video { background: oklch(0.08 0.003 25); }
+  .screen.video { background: oklch(var(--n80)); }
   .screen.video > * { visibility: hidden; }
   .screen-logo {
     max-width: 44%;
@@ -1274,29 +1457,35 @@
     object-fit: contain;
     filter: drop-shadow(0 12px 30px oklch(0 0 0 / 0.5));
   }
-  .screen-letter { font-size: 5rem; font-weight: 900; color: oklch(1 0 0 / 0.15); }
+  .screen-letter { font-size: 5rem; font-weight: 900; color: oklch(var(--n1000) / 0.15); }
+  /* The whole screen starts the channel; the button says so */
   .screen-play {
     position: absolute;
     inset: 0;
-    display: grid;
-    place-items: center;
-    background: oklch(0 0 0 / 0.25);
-    opacity: 0;
-    transition: opacity 150ms var(--ease-out);
+    display: flex;
+    align-items: flex-end;
+    padding: 22px;
+    background: linear-gradient(to top, oklch(0 0 0 / 0.55), transparent 45%);
   }
-  .screen-play :global(svg) {
-    width: 76px;
-    height: 76px;
-    padding: 20px 18px 20px 22px;
-    border-radius: 50%;
-    background: oklch(0.98 0.004 25 / 0.95);
-    color: oklch(0.14 0.004 25);
-    box-shadow: 0 10px 30px oklch(0 0 0 / 0.5);
-    transition: transform 200ms var(--ease-out);
+  .screen-play:focus-visible { outline: none; }
+  .watch-cta {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    height: 48px;
+    padding: 0 12px 0 20px;
+    border-radius: 24px;
+    background: var(--color-text);
+    color: oklch(var(--n140));
+    font-size: 1rem;
+    font-weight: 800;
+    box-shadow: 0 10px 30px oklch(0 0 0 / 0.45);
+    transition: background 150ms var(--ease-out);
   }
-  .screen:hover .screen-play,
-  .screen-play:focus-visible { opacity: 1; }
-  .screen-play:hover :global(svg) { transform: scale(1.06); }
+  .watch-cta :global(svg) { width: 20px; height: 20px; }
+  .watch-cta kbd { background: oklch(0 0 0 / 0.1); color: oklch(var(--n350)); }
+  .screen-play:hover .watch-cta { background: oklch(var(--n860)); }
+  .screen-play:focus-visible .watch-cta { outline: 2px solid var(--color-text); outline-offset: 3px; }
 
   .bar {
     display: flex;
@@ -1305,10 +1494,28 @@
     height: 56px;
     padding: 0 10px;
     border-radius: 0 0 12px 12px;
-    background: oklch(0.16 0.004 25);
-    box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.06);
+    background: oklch(var(--n160));
+    box-shadow: inset 0 1px 0 oklch(var(--n1000) / 0.06);
   }
   .spacer { flex: 1; }
+  .channels-btn {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    height: 36px;
+    margin-right: 8px;
+    padding: 0 14px 0 11px;
+    border-radius: 18px;
+    background: var(--color-text);
+    color: oklch(var(--n140));
+    font-size: 0.8125rem;
+    font-weight: 800;
+    transition: background 150ms var(--ease-out);
+  }
+  .channels-btn :global(svg) { width: 17px; height: 17px; }
+  .channels-btn:hover { background: oklch(var(--n860)); }
+  .channels-btn:focus-visible { outline: 2px solid var(--color-text); outline-offset: 2px; }
 
   .ib {
     position: relative;
@@ -1319,14 +1526,13 @@
     place-items: center;
     border-radius: 8px;
     background: none;
-    color: oklch(0.9 0.004 25);
+    color: oklch(var(--n900));
     transition: background 120ms var(--ease-out), color 120ms var(--ease-out);
   }
   .ib > :global(svg) { width: 22px; height: 22px; }
-  .ib:hover { background: oklch(1 0 0 / 0.08); color: var(--color-text); }
-  .ib:active { transform: scale(0.94); }
+  .ib:hover { background: oklch(var(--n1000) / 0.08); color: var(--color-text); }
   .ib:focus-visible { outline: 2px solid var(--color-text); outline-offset: -2px; }
-  .ib.on { color: var(--color-text); background: oklch(1 0 0 / 0.1); }
+  .ib.on { color: var(--color-text); background: oklch(var(--n1000) / 0.1); }
   .ib.stop:hover { color: var(--color-accent-soft); }
 
   /* Tooltips open downward: anything above the bar sits under the native video */
@@ -1336,20 +1542,20 @@
     top: calc(100% + 8px);
     left: 50%;
     z-index: 5;
-    transform: translate(-50%, -4px);
+    transform: translate(-50%, 0);
     padding: 6px 10px;
     border-radius: 4px;
     background: var(--color-text);
-    color: oklch(0.14 0.004 25);
+    color: oklch(var(--n140));
     font-size: 0.75rem;
     font-weight: 700;
     white-space: nowrap;
-    opacity: 0;
+    /* Instant show/hide: see .row-fav */
+    visibility: hidden;
     pointer-events: none;
-    transition: opacity 120ms var(--ease-out), transform 120ms var(--ease-out);
   }
   .ib:hover::after,
-  .ib:focus-visible::after { opacity: 1; transform: translate(-50%, 0); }
+  .ib:focus-visible::after { visibility: visible; }
 
   .vol {
     display: inline-flex;
@@ -1365,7 +1571,7 @@
     padding: 0;
     border: none;
     border-radius: 2px;
-    background: linear-gradient(to right, var(--color-text) var(--fill), oklch(1 0 0 / 0.2) var(--fill));
+    background: linear-gradient(to right, var(--color-text) var(--fill), oklch(var(--n1000) / 0.2) var(--fill));
     cursor: pointer;
   }
   .vol-slider::-webkit-slider-thumb {
@@ -1375,9 +1581,7 @@
     border-radius: 50%;
     background: var(--color-text);
     box-shadow: 0 1px 4px oklch(0 0 0 / 0.5);
-    transition: transform 120ms var(--ease-out);
   }
-  .vol-slider:hover::-webkit-slider-thumb { transform: scale(1.2); }
   .vol-slider:focus-visible { outline: 2px solid var(--color-text); outline-offset: 6px; }
   .vol-value {
     min-width: 42px;
@@ -1395,7 +1599,7 @@
     height: 16px;
     margin: 0 4px 0 8px;
   }
-  .signal i { width: 4px; border-radius: 1px; background: oklch(1 0 0 / 0.2); }
+  .signal i { width: 4px; border-radius: 1px; background: oklch(var(--n1000) / 0.2); }
   .signal i:nth-child(1) { height: 6px; }
   .signal i:nth-child(2) { height: 11px; }
   .signal i:nth-child(3) { height: 16px; }
@@ -1408,7 +1612,7 @@
     width: 12px;
     height: 12px;
     border-radius: 50%;
-    border: 2px solid oklch(1 0 0 / 0.2);
+    border: 2px solid oklch(var(--n1000) / 0.2);
     border-top-color: currentColor;
     animation: spin 800ms linear infinite;
   }
@@ -1426,7 +1630,7 @@
     box-shadow: inset 0 0 0 1px oklch(0.78 0.15 75 / 0.35);
     color: var(--color-text);
   }
-  .guard p { flex: 1; min-width: 0; color: oklch(0.88 0.004 25); }
+  .guard p { flex: 1; min-width: 0; color: oklch(var(--n880)); }
   .guard p b { color: var(--color-text); }
   .guard > :global(svg) { width: 20px; height: 20px; flex-shrink: 0; }
   .guard .mini-spin { width: 18px; height: 18px; color: var(--color-accent-yellow); }
@@ -1440,13 +1644,13 @@
     height: 32px;
     padding: 0 14px;
     border-radius: 6px;
-    background: oklch(1 0 0 / 0.1);
+    background: oklch(var(--n1000) / 0.1);
     color: var(--color-text);
     font-size: 0.8125rem;
     font-weight: 700;
   }
-  .guard button:hover { background: oklch(1 0 0 / 0.18); }
-  .guard button.primary { background: var(--color-text); color: oklch(0.14 0.004 25); }
+  .guard button:hover { background: oklch(var(--n1000) / 0.18); }
+  .guard button.primary { background: var(--color-text); color: oklch(var(--n140)); }
   .chip.on-good { color: var(--color-accent-green); }
 
   .pill {
@@ -1461,7 +1665,7 @@
     font-weight: 800;
     letter-spacing: 0.06em;
     text-transform: uppercase;
-    background: oklch(1 0 0 / 0.08);
+    background: oklch(var(--n1000) / 0.08);
     color: var(--color-text);
   }
   .pill i { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
@@ -1479,14 +1683,14 @@
   .pill.behind:hover { background: var(--color-accent-hover); }
   @keyframes pulse { 50% { opacity: 0.35; } }
 
-  .track-wrap { padding: 0 10px 6px; border-top: 1px solid oklch(1 0 0 / 0.06); }
+  .track-wrap { padding: 0 10px 6px; border-top: 1px solid oklch(var(--n1000) / 0.06); }
 
   .keys {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
     gap: 10px 20px;
     padding: 16px 18px;
-    border-top: 1px solid oklch(1 0 0 / 0.06);
+    border-top: 1px solid oklch(var(--n1000) / 0.06);
     font-size: 0.8125rem;
     color: var(--color-text-muted);
   }
@@ -1494,7 +1698,7 @@
   .keys dt {
     padding: 2px 7px;
     border-radius: 4px;
-    background: oklch(1 0 0 / 0.08);
+    background: oklch(var(--n1000) / 0.08);
     color: var(--color-text);
     font-size: 0.6875rem;
     font-weight: 700;
@@ -1518,7 +1722,7 @@
     display: grid;
     place-items: center;
     border-radius: 12px;
-    background: oklch(0.24 0.005 25);
+    background: oklch(var(--n240));
     font-size: 1.5rem;
     font-weight: 800;
     color: var(--color-text-muted);
@@ -1549,7 +1753,7 @@
     flex-shrink: 0;
     padding: 1px 7px;
     border-radius: 4px;
-    background: oklch(1 0 0 / 0.1);
+    background: oklch(var(--n1000) / 0.1);
     color: var(--color-text);
     font-size: 0.75rem;
     font-weight: 800;
@@ -1564,7 +1768,7 @@
     height: 38px;
     padding: 0 15px 0 12px;
     border-radius: 19px;
-    background: oklch(1 0 0 / 0.08);
+    background: oklch(var(--n1000) / 0.08);
     color: var(--color-text);
     font-size: 0.8125rem;
     font-weight: 700;
@@ -1572,13 +1776,13 @@
     transition: background 150ms var(--ease-out), color 150ms var(--ease-out);
   }
   .chip :global(svg) { width: 17px; height: 17px; flex-shrink: 0; }
-  .chip:hover:not(:disabled) { background: oklch(1 0 0 / 0.15); }
+  .chip:hover:not(:disabled) { background: oklch(var(--n1000) / 0.15); }
   .chip:focus-visible { outline: 2px solid var(--color-text); outline-offset: 2px; }
   .chip.on { color: var(--color-accent-soft); }
   .chip.ok { color: var(--color-accent-green); }
   .chip.bad { color: var(--color-accent-soft); }
 
-  .hint { font-size: 0.875rem; color: oklch(0.85 0.004 25); margin-top: -6px; }
+  .hint { font-size: 0.875rem; color: oklch(var(--n850)); margin-top: -6px; }
   .hint.error { color: var(--color-accent-soft); }
 
   /* More in category */
@@ -1624,14 +1828,16 @@
     place-items: center;
     aspect-ratio: 16 / 9;
     border-radius: 8px;
-    background: oklch(0.22 0.005 25);
-    box-shadow: inset 0 0 0 1px oklch(1 0 0 / 0.06);
+    background: oklch(var(--n220));
+    box-shadow: inset 0 0 0 1px oklch(var(--n1000) / 0.06);
     overflow: hidden;
-    transition: transform 200ms var(--ease-out), box-shadow 200ms var(--ease-out);
+    /* Paint-only lift (top, not transform): WebKitGTK blinks when a GPU transition ends */
+    top: 0;
+    transition: top 200ms var(--ease-out), box-shadow 200ms var(--ease-out);
   }
   .tile-art img { width: 100%; height: 100%; object-fit: contain; padding: 14px 22px; }
   .tile-art > span:not(.tile-on) { font-size: 1.5rem; font-weight: 800; color: var(--color-text-muted); }
-  .tile:hover .tile-art { transform: translateY(-3px); box-shadow: inset 0 0 0 1px oklch(1 0 0 / 0.2), 0 14px 28px -12px oklch(0 0 0 / 0.8); }
+  .tile:hover .tile-art { top: -3px; box-shadow: inset 0 0 0 1px oklch(var(--n1000) / 0.2), 0 14px 28px -12px oklch(0 0 0 / 0.8); }
   .tile:focus-visible { outline: none; }
   .tile:focus-visible .tile-art { outline: 2px solid var(--color-text); outline-offset: 2px; }
   .tile.playing .tile-art { box-shadow: inset 0 0 0 2px var(--color-accent); }
@@ -1700,12 +1906,12 @@
     padding: 0 26px;
     border-radius: 6px;
     background: var(--color-text);
-    color: oklch(0.14 0.004 25);
+    color: oklch(var(--n140));
     font-size: 1rem;
     font-weight: 700;
     transition: background 150ms var(--ease-out);
   }
-  .btn-white:hover { background: oklch(0.85 0.004 25); }
+  .btn-white:hover { background: oklch(var(--n850)); }
   .btn-white:focus-visible { outline: 2px solid var(--color-text); outline-offset: 3px; }
 
   .stage-empty {
@@ -1728,7 +1934,7 @@
     width: 24px;
     height: 24px;
     border-radius: 50%;
-    border: 3px solid oklch(1 0 0 / 0.12);
+    border: 3px solid oklch(var(--n1000) / 0.12);
     border-top-color: var(--color-accent);
     animation: spin 800ms linear infinite;
   }
@@ -1738,19 +1944,23 @@
   .sk-row { gap: 12px; height: 62px; padding: 0 8px 0 46px; }
   .sk {
     border-radius: 6px;
-    background: linear-gradient(90deg, oklch(1 0 0 / 0.05) 0%, oklch(1 0 0 / 0.1) 50%, oklch(1 0 0 / 0.05) 100%);
+    background: linear-gradient(90deg, oklch(var(--n1000) / 0.05) 0%, oklch(var(--n1000) / 0.1) 50%, oklch(var(--n1000) / 0.05) 100%);
     background-size: 200% 100%;
-    animation: shimmer 1.6s linear infinite;
+    /* Hidden for the first 160ms: fast loads go straight to content instead of
+       flashing a skeleton for a frame or two */
+    visibility: hidden;
+    animation: shimmer 1.6s linear infinite, sk-show 0s 160ms forwards;
   }
+  @keyframes sk-show { to { visibility: visible; } }
   .sk-logo { width: 64px; height: 42px; flex-shrink: 0; }
   .sk-text { height: 14px; width: 60%; }
   @keyframes shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
 
   @media (max-width: 1150px) {
-    .live-page { grid-template-columns: 200px minmax(260px, 320px) minmax(0, 1fr); }
+    .live-page { grid-template-columns: 320px minmax(0, 1fr); }
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .eq i, .pill.behind i, .sk, .spinner { animation: none; }
+    .eq i, .pill.behind i, .sk, .spinner { animation: none; visibility: visible; }
   }
 </style>

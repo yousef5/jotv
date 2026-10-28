@@ -1,7 +1,11 @@
 import { writable } from 'svelte/store';
 import { getSetting, setSetting, getAllSettings } from '$lib/tauri';
 
-export const theme = writable<string>('dark');
+// Start from the last theme used, so the first paint already has the right colours
+function savedTheme(): string {
+  try { return localStorage.getItem('jotv.theme') ?? 'dark'; } catch { return 'dark'; }
+}
+export const theme = writable<string>(savedTheme());
 export const externalPlayer = writable<string>('');
 export const externalPlayerPath = writable<string>('');
 export const downloadDir = writable<string>('');

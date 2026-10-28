@@ -1,9 +1,10 @@
 //! A native child window inside the app window that MPV renders into (`--wid`),
 //! so live TV plays in the app instead of a separate window.
 //!
-//! Linux/X11 only: MPV can't embed into Wayland surfaces, so on Wayland sessions
-//! the app runs through XWayland (see `run()` in lib.rs). Elsewhere these
-//! commands return an error and the frontend falls back to MPV's own window.
+//! Linux needs X11: MPV can't embed into Wayland surfaces, so on Wayland sessions
+//! the app runs through XWayland (see `run()` in lib.rs). Windows uses a child
+//! HWND. Elsewhere these commands return an error and the frontend falls back
+//! to MPV's own window.
 
 use tauri::AppHandle;
 
@@ -117,7 +118,109 @@ mod imp {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(windows)]
+mod imp {
+    //! A plain black child window of the main window. It sits above WebView2's own
+    //! child window, so MPV's picture shows over the page at the player's spot.
+
+    use std::sync::{mpsc, Mutex};
+    use tauri::{AppHandle, Manager};
+    use windows::core::w;
+    use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+    use windows::Win32::Graphics::Gdi::{GetStockObject, BLACK_BRUSH, HBRUSH};
+    use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassW, SetWindowPos, HWND_TOP,
+        SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_SHOWWINDOW, WINDOW_EX_STYLE, WNDCLASSW, WS_CHILD,
+        WS_CLIPSIBLINGS,
+    };
+
+    // HWNDs aren't Send; keep the raw value. Only touched on the main thread.
+    static SURFACE: Mutex<Option<isize>> = Mutex::new(None);
+
+    /// Runs `f` on the main (UI) thread and waits for its result: a window belongs
+    /// to the thread that creates it, and only the main thread pumps messages.
+    fn on_main<T: Send + 'static>(app: &AppHandle, f: impl FnOnce(&AppHandle) -> Result<T, String> + Send + 'static) -> Result<T, String> {
+        let (tx, rx) = mpsc::channel();
+        let handle = app.clone();
+        app.run_on_main_thread(move || {
+            tx.send(f(&handle)).ok();
+        })
+        .map_err(|e| e.to_string())?;
+        rx.recv().map_err(|e| e.to_string())?
+    }
+
+    unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+        DefWindowProcW(hwnd, msg, wp, lp)
+    }
+
+    pub fn attach(app: &AppHandle) -> Result<u64, String> {
+        on_main(app, |app| {
+            if let Some(h) = *SURFACE.lock().unwrap() {
+                return Ok(h as u64);
+            }
+            let parent = app.get_webview_window("main").ok_or("Main window not found")?.hwnd().map_err(|e| e.to_string())?;
+            unsafe {
+                let instance = GetModuleHandleW(None).map_err(|e| e.to_string())?;
+                let class = WNDCLASSW {
+                    lpfnWndProc: Some(wndproc),
+                    hInstance: instance.into(),
+                    hbrBackground: HBRUSH(GetStockObject(BLACK_BRUSH).0),
+                    lpszClassName: w!("JoTVVideoSurface"),
+                    ..Default::default()
+                };
+                // Fails harmlessly once the class exists (after a detach/attach)
+                RegisterClassW(&class);
+                let hwnd = CreateWindowExW(
+                    WINDOW_EX_STYLE(0),
+                    w!("JoTVVideoSurface"),
+                    w!(""),
+                    WS_CHILD | WS_CLIPSIBLINGS,
+                    0,
+                    0,
+                    1,
+                    1,
+                    Some(parent),
+                    None,
+                    Some(instance.into()),
+                    None,
+                )
+                .map_err(|e| format!("Could not create a video surface: {e}"))?;
+                *SURFACE.lock().unwrap() = Some(hwnd.0 as isize);
+                Ok(hwnd.0 as u64)
+            }
+        })
+    }
+
+    pub fn place(app: &AppHandle, x: f64, y: f64, w: f64, h: f64, visible: bool) -> Result<(), String> {
+        on_main(app, move |app| {
+            let Some(raw) = *SURFACE.lock().unwrap() else { return Err("No video surface".into()) };
+            let hwnd = HWND(raw as *mut _);
+            // The page works in CSS pixels; the window in physical ones
+            let scale = app.get_webview_window("main").and_then(|w| w.scale_factor().ok()).unwrap_or(1.0);
+            let px = |v: f64| (v * scale).round() as i32;
+            unsafe {
+                if visible && w >= 1.0 && h >= 1.0 {
+                    SetWindowPos(hwnd, Some(HWND_TOP), px(x), px(y), px(w), px(h), SWP_NOACTIVATE | SWP_SHOWWINDOW)
+                } else {
+                    SetWindowPos(hwnd, None, 0, 0, 0, 0, SWP_NOACTIVATE | SWP_HIDEWINDOW)
+                }
+                .map_err(|e| e.to_string())
+            }
+        })
+    }
+
+    pub fn detach(app: &AppHandle) -> Result<(), String> {
+        on_main(app, |_| {
+            if let Some(raw) = SURFACE.lock().unwrap().take() {
+                unsafe { DestroyWindow(HWND(raw as *mut _)).ok() };
+            }
+            Ok(())
+        })
+    }
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
 mod imp {
     use tauri::AppHandle;
 

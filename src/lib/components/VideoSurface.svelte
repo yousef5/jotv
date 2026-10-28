@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { fade } from 'svelte/transition';
+  import { jsFade } from '$lib/motion';
   import { goto } from '$app/navigation';
   import { page } from '$app/stores';
   import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -123,12 +123,12 @@
 {#if mini && $nowPlaying}
   <!-- The video itself is a native surface sitting right above this bar -->
   <div
-    class="mini"
+    class="mini dark-zone"
     style:left="{viewport.w - MINI_W - MARGIN}px"
     style:top="{viewport.h - BAR_H - MARGIN}px"
     style:width="{MINI_W}px"
     style:height="{BAR_H}px"
-    transition:fade={{ duration: 150 }}
+    transition:jsFade={{ duration: 150 }}
   >
     <span
       class="dot"
@@ -168,8 +168,8 @@
     gap: 6px;
     padding: 0 8px 0 14px;
     border-radius: 0 0 10px 10px;
-    background: oklch(0.2 0.005 25 / 0.97);
-    box-shadow: 0 24px 50px -12px oklch(0 0 0 / 0.8), 0 0 0 1px oklch(1 0 0 / 0.08);
+    background: oklch(var(--n200) / 0.97);
+    box-shadow: 0 24px 50px -12px oklch(0 0 0 / 0.8), 0 0 0 1px oklch(var(--n1000) / 0.08);
   }
 
   .dot {
@@ -216,7 +216,7 @@
     color: var(--color-text);
     transition: background 150ms var(--ease-out);
   }
-  button:hover { background: oklch(1 0 0 / 0.1); }
+  button:hover { background: oklch(var(--n1000) / 0.1); }
   button:focus-visible { outline: 2px solid var(--color-text); outline-offset: 1px; }
   button :global(svg) { width: 18px; height: 18px; }
 

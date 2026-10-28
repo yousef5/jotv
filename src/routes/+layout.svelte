@@ -8,6 +8,7 @@
   import FavoriteSaved from '$lib/components/FavoriteSaved.svelte';
   import { setupDownloadListeners } from '$lib/stores/downloads';
   import { syncOnLaunch } from '$lib/stores/sync';
+  import { theme, loadSettings } from '$lib/stores/settings';
   import '@fontsource-variable/inter';
   import '@fontsource/ibm-plex-sans-arabic/arabic-400.css';
   import '@fontsource/ibm-plex-sans-arabic/arabic-500.css';
@@ -26,8 +27,18 @@
     if (nav.type !== 'popstate') document.querySelector('main')?.scrollTo({ top: 0 });
   });
 
+  // Theme: a data attribute on <html> switches the colour tokens (see app.css).
+  // Also kept in localStorage so app.html can set it before the first paint.
+  $effect(() => {
+    const t = $theme === 'light' ? 'light' : 'dark';
+    document.documentElement.dataset.theme = t;
+    try { localStorage.setItem('jotv.theme', t); } catch {}
+  });
+
   onMount(() => {
     let cleanup: (() => void) | undefined;
+
+    loadSettings();
 
     setupDownloadListeners().then((unlisten) => {
       cleanup = unlisten;
@@ -53,7 +64,7 @@
 <SearchPalette />
 <FavoriteSaved />
 
-<main class:has-sidebar={!isPlayerRoute} class:cinema-mode={isPlayerRoute}>
+<main class:has-sidebar={!isPlayerRoute} class:cinema-mode={isPlayerRoute} class:dark-zone={isPlayerRoute}>
   {@render children()}
 </main>
 
@@ -62,6 +73,8 @@
     margin-left: 72px;
     height: 100vh;
     overflow-y: auto;
+    /* Never scroll sideways: a stray scrollIntoView or wide child would shift every page */
+    overflow-x: clip;
     padding: 24px;
   }
 

@@ -1,0 +1,38 @@
+# Maintainer: Mohammed Yousef <yousefcoding311@gmail.com>
+#
+# Arch / CachyOS package for JoTV, repackaged from the .deb that
+# `pnpm tauri build --bundles deb` makes (CI does the same for releases).
+# Put JoTV_<version>_amd64.deb next to this file, then: makepkg -si
+pkgname=jotv
+pkgver=0.3.0
+pkgrel=1
+pkgdesc='IPTV player for live TV, movies and series'
+arch=('x86_64')
+url='https://github.com/yousef5/jotv'
+license=('MIT')
+depends=('webkit2gtk-4.1' 'gtk3' 'mpv' 'ffmpeg' 'hicolor-icon-theme')
+optdepends=(
+  'yt-dlp: save videos from YouTube, TikTok, Instagram and more'
+  'xorg-xwayland: show video inside the JoTV window on Wayland'
+)
+source=("JoTV_${pkgver}_amd64.deb" 'jotv-512.png')
+sha256sums=('SKIP' 'SKIP')
+options=('!strip' '!debug')
+
+package() {
+  bsdtar -xf data.tar.gz -C "$pkgdir"
+  # Tauri names the 256px icon folder "256x256@2", which icon themes ignore
+  local icons="$pkgdir/usr/share/icons/hicolor"
+  if [[ -d "$icons/256x256@2" ]]; then
+    mkdir -p "$icons/256x256"
+    mv "$icons/256x256@2/apps" "$icons/256x256/"
+    rmdir "$icons/256x256@2"
+  fi
+  install -Dm644 jotv-512.png "$icons/512x512/apps/jotv.png"
+  # Docks and bars (Hyprland/DMS) find the entry by the window's class. Under
+  # X11/XWayland that's "Jotv" (WM_CLASS capitalises it), not Tauri's "jotv".
+  local apps="$pkgdir/usr/share/applications"
+  [[ -f "$apps/JoTV.desktop" ]] && mv "$apps/JoTV.desktop" "$apps/jotv.desktop"
+  sed -i '/^StartupWMClass=/d' "$apps/jotv.desktop"
+  echo 'StartupWMClass=Jotv' >> "$apps/jotv.desktop"
+}

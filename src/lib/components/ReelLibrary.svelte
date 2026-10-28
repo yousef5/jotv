@@ -16,7 +16,7 @@
 
 <script lang="ts">
   import { onMount, tick } from 'svelte';
-  import { fade, fly, slide } from 'svelte/transition';
+  import { jsFade, jsFly, jsSlide } from '$lib/motion';
   import { goto } from '$app/navigation';
   import { open as openDialog } from '@tauri-apps/plugin-dialog';
   import {
@@ -378,7 +378,7 @@
     confirmDeleteCat = null;
     draft = d;
     await tick();
-    draftEl?.focus();
+    draftEl?.focus({ preventScroll: true });
     draftEl?.select();
   }
 
@@ -537,7 +537,7 @@
     const typing = e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement;
     if (e.key === '/' && !typing) {
       e.preventDefault();
-      searchEl?.focus();
+      searchEl?.focus({ preventScroll: true });
     } else if (e.key === 'Delete' && !typing) {
       if (selecting && selected.size) askDelete = [...selected];
       else if (editingId) askDelete = [editingId];
@@ -677,7 +677,7 @@
       </div>
     {/if}
     {#if askDelete?.length === 1 && askDelete[0] === r.id}
-      <div class="confirm" transition:fade={{ duration: 120 }} role="alertdialog" aria-label="Delete this {r.kind === 'image' ? 'photo' : 'video'}?">
+      <div class="confirm" transition:jsFade={{ duration: 120 }} role="alertdialog" aria-label="Delete this {r.kind === 'image' ? 'photo' : 'video'}?">
         <b>Delete this {r.kind === 'image' ? 'photo' : 'video'}?</b>
         <button class="btn danger solid small" onclick={() => deleteReels([r.id], true)}>Delete file from disk</button>
         <button class="btn ghost small" onclick={() => deleteReels([r.id], false)}>Only remove from library</button>
@@ -729,7 +729,7 @@
       </div>
 
       {#snippet draftRow(sub: boolean)}
-        <div class="draft" class:sub transition:slide={{ duration: 160 }}>
+        <div class="draft" class:sub transition:jsSlide={{ duration: 160 }}>
           <input
             bind:this={draftEl}
             bind:value={draft!.name}
@@ -901,9 +901,9 @@
     {/if}
 
     {#if $linkDownloads.length}
-      <section class="dls" aria-label="Downloading" transition:slide={{ duration: 200 }}>
+      <section class="dls" aria-label="Downloading" transition:jsSlide={{ duration: 200 }}>
         {#each $linkDownloads as d (d.id)}
-          <div class="dl" class:failed={d.status === 'failed'} transition:fade={{ duration: 150 }}>
+          <div class="dl" class:failed={d.status === 'failed'} transition:jsFade={{ duration: 150 }}>
             <span class="dl-shot">
               {#if d.thumbnail}<img src={d.thumbnail} alt="" referrerpolicy="no-referrer" />{/if}
               {#if d.status === 'downloading'}
@@ -939,7 +939,7 @@
       </div>
     {:else if !$reels.length}
       <!-- First run -->
-      <div class="empty" in:fade={{ duration: 200 }}>
+      <div class="empty" in:jsFade={{ duration: 200 }}>
         <div class="empty-art" aria-hidden="true">
           <span></span><span></span><span></span>
         </div>
@@ -956,7 +956,7 @@
       {#if hero}
         {@const src = broken.has(hero.id) ? null : thumbSrc(hero)}
         {@const hp = categoryPath($reelCats, hero.category_id)}
-        <header class="hero" in:fade={{ duration: 250 }}>
+        <header class="hero" in:jsFade={{ duration: 250 }}>
           {#if src}<img class="hero-bg" src={src} alt="" aria-hidden="true" />{/if}
           <div class="hero-shot" style:--a={aspect(hero)}>
             {#if src}<img src={src} alt="" />{/if}
@@ -1092,7 +1092,7 @@
           {/each}
         </div>
       {:else}
-        <div class="empty small" in:fade={{ duration: 150 }}>
+        <div class="empty small" in:jsFade={{ duration: 150 }}>
           {#if query.trim() || activeTags.length}
             <h2>No matches</h2>
             <p>Nothing here matches {query.trim() ? `“${query.trim()}”` : ''}{query.trim() && activeTags.length ? ' with ' : ''}{activeTags.map((t) => `#${t}`).join(' ')}.</p>
@@ -1119,7 +1119,7 @@
   {#if editing}
     {@const r = editing}
     {@const src = broken.has(r.id) ? null : thumbSrc(r)}
-    <aside class="editor" transition:fly={{ x: 24, duration: 200 }} aria-label="Video details">
+    <aside class="editor" transition:jsFly={{ x: 24, duration: 200 }} aria-label="Video details">
       <div class="ed-scroll">
         <div class="ed-top">
           <p>Details</p>
@@ -1222,7 +1222,7 @@
 <!-- Bulk delete: what to do with the files -->
 {#if askDelete && askDelete.length > 0 && (askDelete.length > 1 || selecting)}
   {@const n = askDelete.length}
-  <div class="bulk confirm-bar" transition:fly={{ y: 24, duration: 200 }} role="alertdialog" aria-label="Delete videos?">
+  <div class="bulk confirm-bar" transition:jsFly={{ y: 24, duration: 200 }} role="alertdialog" aria-label="Delete videos?">
     <span class="bulk-n">Delete <b>{n}</b> video{n === 1 ? '' : 's'}?</span>
     <button class="btn danger solid small" onclick={() => deleteReels(askDelete!, true)}>Delete file{n === 1 ? '' : 's'} from disk</button>
     <button class="btn ghost small" onclick={() => deleteReels(askDelete!, false)}>Only remove from library</button>
@@ -1231,7 +1231,7 @@
     </button>
   </div>
 {:else if selecting}
-  <div class="bulk" transition:fly={{ y: 24, duration: 200 }} role="toolbar" aria-label="Selected videos">
+  <div class="bulk" transition:jsFly={{ y: 24, duration: 200 }} role="toolbar" aria-label="Selected videos">
     <span class="bulk-n"><b>{selected.size}</b> selected</span>
     <button class="link" onclick={() => (selected = new Set(filtered.length ? filtered.map((r) => r.id) : $reels.map((r) => r.id)))}>Select all</button>
     <span class="sep"></span>
@@ -1254,7 +1254,7 @@
 {/if}
 
 {#if dropping}
-  <div class="dropzone" transition:fade={{ duration: 120 }}>
+  <div class="dropzone" transition:jsFade={{ duration: 120 }}>
     <div>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3"/><polyline points="7 8 12 3 17 8"/><path d="M4 14v4.5A1.5 1.5 0 005.5 20h13a1.5 1.5 0 001.5-1.5V14"/></svg>
       <b>Drop to add to {currentCat ? currentCat.name : 'the library'}</b>
@@ -1264,7 +1264,7 @@
 {/if}
 
 {#if toast}
-  <div class="toast" role="status" transition:fly={{ y: 12, duration: 180 }}>{toast}</div>
+  <div class="toast" role="status" transition:jsFly={{ y: 12, duration: 180 }}>{toast}</div>
 {/if}
 
 <style>
@@ -1316,7 +1316,7 @@
     padding: 0 10px;
     border-radius: 7px;
     background: none;
-    color: oklch(0.86 0.004 25);
+    color: oklch(var(--n860));
     font-size: 0.875rem;
     font-weight: 600;
     text-align: start;
@@ -1331,8 +1331,8 @@
     font-variant-numeric: tabular-nums;
     color: var(--color-text-muted);
   }
-  .ri:hover, .ci:hover .ci-main { background: oklch(1 0 0 / 0.05); color: var(--color-text); }
-  .ri.on, .ci.on .ci-main { background: oklch(1 0 0 / 0.09); color: var(--color-text); }
+  .ri:hover, .ci:hover .ci-main { background: oklch(var(--n1000) / 0.05); color: var(--color-text); }
+  .ri.on, .ci.on .ci-main { background: oklch(var(--n1000) / 0.09); color: var(--color-text); }
   .ri.on :global(svg) { color: var(--color-accent-soft); }
   .ri:focus-visible, .ci-main:focus-visible { outline: 2px solid var(--color-text); outline-offset: -2px; }
 
@@ -1346,7 +1346,7 @@
     top: 0;
     bottom: 0;
     width: 1px;
-    background: oklch(1 0 0 / 0.1);
+    background: oklch(var(--n1000) / 0.1);
   }
   .twisty {
     position: absolute;
@@ -1360,7 +1360,7 @@
     background: none;
     color: var(--color-text-muted);
   }
-  .twisty :global(svg) { width: 14px; height: 14px; transition: transform 150ms var(--ease-out); }
+  .twisty :global(svg) { width: 14px; height: 14px; }
   .twisty.open :global(svg) { transform: rotate(90deg); }
   .twisty.hidden { visibility: hidden; }
   .twisty:hover { color: var(--color-text); }
@@ -1387,7 +1387,7 @@
     transition: background 120ms var(--ease-out), color 120ms var(--ease-out);
   }
   .mini :global(svg) { width: 15px; height: 15px; }
-  .mini:hover { background: oklch(1 0 0 / 0.1); color: var(--color-text); }
+  .mini:hover { background: oklch(var(--n1000) / 0.1); color: var(--color-text); }
   .mini:focus-visible { outline: 2px solid var(--color-text); outline-offset: -2px; }
   .mini.danger { color: var(--color-accent-soft); }
   .mini.wide { width: auto; padding: 0 9px; font-size: 0.75rem; font-weight: 800; background: oklch(0.58 0.225 27 / 0.2); }
@@ -1416,9 +1416,8 @@
     outline-offset: -2px;
   }
   .swatches { display: flex; gap: 6px; margin-top: 8px; }
-  .sw { width: 20px; height: 20px; border-radius: 50%; transition: transform 120ms var(--ease-out); }
+  .sw { width: 20px; height: 20px; border-radius: 50%; }
   .sw.on { box-shadow: 0 0 0 2px var(--color-surface), 0 0 0 4px var(--color-text); }
-  .sw:hover { transform: scale(1.12); }
   .draft-hint { margin-top: 6px; font-size: 0.6875rem; color: var(--color-text-muted); }
   .rail-empty { margin: 2px 10px; font-size: 0.8125rem; line-height: 1.5; color: var(--color-text-muted); }
   .rail-empty b { color: var(--color-text); font-weight: 600; }
@@ -1427,7 +1426,7 @@
     gap: 6px;
     margin-top: 12px;
     padding: 12px 10px 0;
-    border-top: 1px solid oklch(1 0 0 / 0.07);
+    border-top: 1px solid oklch(var(--n1000) / 0.07);
     font-size: 0.75rem;
     font-weight: 600;
     color: var(--color-text-muted);
@@ -1440,6 +1439,7 @@
     top: -24px;
     z-index: 5;
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 8px;
     margin: -24px -8px 18px;
@@ -1448,7 +1448,9 @@
   }
   .grow { flex: 1; }
   .search {
-    flex: 0 1 420px;
+    /* Shrinks first, then the buttons wrap under it on small screens */
+    flex: 1 1 220px;
+    max-width: 420px;
     display: flex;
     align-items: center;
     gap: 10px;
@@ -1465,19 +1467,19 @@
   .search kbd {
     padding: 1px 7px;
     border-radius: 4px;
-    background: oklch(1 0 0 / 0.08);
+    background: oklch(var(--n1000) / 0.08);
     font: inherit;
     font-size: 0.75rem;
     font-weight: 700;
     color: var(--color-text-muted);
   }
-  .clear { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: oklch(1 0 0 / 0.1); color: var(--color-text); }
+  .clear { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: oklch(var(--n1000) / 0.1); color: var(--color-text); }
   .clear :global(svg) { width: 12px; height: 12px; }
 
   .seg { display: flex; padding: 3px; border-radius: 8px; background: var(--color-surface); box-shadow: inset 0 0 0 1px var(--color-border); }
   .seg button { width: 36px; height: 34px; display: grid; place-items: center; border-radius: 6px; background: none; color: var(--color-text-muted); }
   .seg button :global(svg) { width: 18px; height: 18px; }
-  .seg button.on { background: oklch(1 0 0 / 0.12); color: var(--color-text); }
+  .seg button.on { background: oklch(var(--n1000) / 0.12); color: var(--color-text); }
 
   .btn {
     display: inline-flex;
@@ -1488,20 +1490,19 @@
     padding: 0 16px;
     border-radius: 8px;
     background: var(--color-text);
-    color: oklch(0.16 0.004 25);
+    color: oklch(var(--n160));
     font-size: 0.875rem;
     font-weight: 700;
     white-space: nowrap;
-    transition: background 120ms var(--ease-out), transform 120ms var(--ease-out), opacity 120ms;
+    transition: background 120ms var(--ease-out);
   }
   .btn :global(svg) { width: 18px; height: 18px; }
-  .btn:hover { background: oklch(0.86 0.004 25); }
-  .btn:active { transform: scale(0.97); }
+  .btn:hover { background: oklch(var(--n860)); }
   .btn:disabled { opacity: 0.5; pointer-events: none; }
   .btn:focus-visible { outline: 2px solid var(--color-text); outline-offset: 2px; }
-  .btn.ghost { background: oklch(1 0 0 / 0.08); color: var(--color-text); }
-  .btn.ghost:hover { background: oklch(1 0 0 / 0.14); }
-  .btn.ghost.on { background: oklch(1 0 0 / 0.18); }
+  .btn.ghost { background: oklch(var(--n1000) / 0.08); color: var(--color-text); }
+  .btn.ghost:hover { background: oklch(var(--n1000) / 0.14); }
+  .btn.ghost.on { background: oklch(var(--n1000) / 0.18); }
   .btn.play { background: var(--color-text); }
   .btn.primary { background: var(--color-accent); color: var(--color-on-accent); }
   .btn.primary:hover, .btn.primary.on { background: var(--color-accent-hover); }
@@ -1523,16 +1524,16 @@
     box-shadow: inset 0 0 0 1px var(--color-border);
   }
   .dl.failed { box-shadow: inset 0 0 0 1px oklch(0.58 0.225 27 / 0.5); }
-  .dl-shot { position: relative; flex: none; width: 96px; height: 54px; border-radius: 6px; overflow: hidden; background: oklch(0.14 0.004 25); }
+  .dl-shot { position: relative; flex: none; width: 96px; height: 54px; border-radius: 6px; overflow: hidden; background: oklch(var(--n140)); }
   .dl-shot img { width: 100%; height: 100%; object-fit: cover; opacity: 0.55; }
   .ring { position: absolute; inset: 0; margin: auto; width: 30px; height: 30px; transform: rotate(-90deg); }
-  .ring circle { fill: none; stroke: oklch(1 0 0 / 0.25); stroke-width: 3.5; }
+  .ring circle { fill: none; stroke: oklch(var(--n1000) / 0.25); stroke-width: 3.5; }
   .ring .fill { stroke: var(--color-text); stroke-linecap: round; transition: stroke-dasharray 300ms var(--ease-out); }
   .dl-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
   .dl-text b { font-size: 0.875rem; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .dl-text small { font-size: 0.75rem; font-weight: 600; color: var(--color-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .dl-text small.bad { color: var(--color-accent-soft); }
-  .bar { height: 3px; border-radius: 2px; background: oklch(1 0 0 / 0.1); overflow: hidden; }
+  .bar { height: 3px; border-radius: 2px; background: oklch(var(--n1000) / 0.1); overflow: hidden; }
   .bar i { display: block; height: 100%; border-radius: 2px; background: var(--color-accent); transition: width 300ms var(--ease-out); }
   .btn.danger { background: oklch(0.58 0.225 27 / 0.16); color: var(--color-accent-soft); }
   .btn.danger:hover { background: var(--color-accent); color: var(--color-on-accent); }
@@ -1562,7 +1563,7 @@
     padding: 28px 32px;
     border-radius: 14px;
     overflow: hidden;
-    background: oklch(0.14 0.004 25);
+    background: oklch(var(--n140));
     isolation: isolate;
   }
   .hero-bg {
@@ -1579,7 +1580,7 @@
     position: absolute;
     inset: 0;
     z-index: -1;
-    background: linear-gradient(100deg, oklch(0.12 0.004 25 / 0.2) 0%, oklch(0.12 0.004 25 / 0.75) 70%);
+    background: linear-gradient(100deg, oklch(var(--n120) / 0.2) 0%, oklch(var(--n120) / 0.75) 70%);
   }
   .hero-shot {
     flex-shrink: 0;
@@ -1589,7 +1590,7 @@
     border-radius: 10px;
     overflow: hidden;
     background: oklch(0 0 0 / 0.3);
-    box-shadow: 0 30px 60px -20px oklch(0 0 0 / 0.8), 0 0 0 1px oklch(1 0 0 / 0.08);
+    box-shadow: 0 30px 60px -20px oklch(0 0 0 / 0.8), 0 0 0 1px oklch(var(--n1000) / 0.08);
   }
   .hero-shot img { width: 100%; height: 100%; object-fit: cover; }
   .hero-text { min-width: 0; display: flex; flex-direction: column; gap: 10px; }
@@ -1616,7 +1617,7 @@
     overflow: hidden;
     max-width: 30ch;
   }
-  .hero-facts { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 0.875rem; font-weight: 700; color: oklch(0.85 0.004 25); }
+  .hero-facts { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 0.875rem; font-weight: 700; color: oklch(var(--n850)); }
   .hero-tags { display: flex; flex-wrap: wrap; gap: 6px; }
   .hero-actions { display: flex; gap: 10px; margin-top: 6px; }
   .hero-actions .btn { height: 44px; padding: 0 22px; font-size: 0.9375rem; }
@@ -1645,15 +1646,15 @@
     height: 30px;
     padding: 0 12px;
     border-radius: 15px;
-    background: oklch(1 0 0 / 0.07);
-    color: oklch(0.88 0.004 25);
+    background: oklch(var(--n1000) / 0.07);
+    color: oklch(var(--n880));
     font-size: 0.8125rem;
     font-weight: 600;
     transition: background 120ms var(--ease-out), color 120ms var(--ease-out);
   }
   .tag em { font-style: normal; font-size: 0.6875rem; font-weight: 700; color: var(--color-text-muted); }
-  .tag:hover { background: oklch(1 0 0 / 0.13); color: var(--color-text); }
-  .tag.on { background: var(--color-text); color: oklch(0.16 0.004 25); }
+  .tag:hover { background: oklch(var(--n1000) / 0.13); color: var(--color-text); }
+  .tag.on { background: var(--color-text); color: oklch(var(--n160)); }
   .tag.on :global(svg) { width: 11px; height: 11px; }
 
   /* ── Shelves ── */
@@ -1672,9 +1673,8 @@
     font-size: 0.8125rem;
     font-weight: 700;
   }
-  .see-all :global(svg) { width: 15px; height: 15px; transition: transform 150ms var(--ease-out); }
-  .see-all:hover { color: var(--color-text); background: oklch(1 0 0 / 0.06); }
-  .see-all:hover :global(svg) { transform: translateX(2px); }
+  .see-all :global(svg) { width: 15px; height: 15px; }
+  .see-all:hover { color: var(--color-text); background: oklch(var(--n1000) / 0.06); }
   .shelf-wrap { position: relative; }
   .shelf-row {
     --h: 230px;
@@ -1697,18 +1697,19 @@
     display: grid;
     place-items: center;
     border-radius: 8px;
-    background: oklch(0.14 0.004 25 / 0.88);
+    background: oklch(var(--n140) / 0.88);
     color: var(--color-text);
-    box-shadow: 0 10px 24px -8px oklch(0 0 0 / 0.8), 0 0 0 1px oklch(1 0 0 / 0.1);
-    opacity: 0;
-    transition: opacity 160ms var(--ease-out), background 120ms var(--ease-out);
+    box-shadow: 0 10px 24px -8px oklch(0 0 0 / 0.8), 0 0 0 1px oklch(var(--n1000) / 0.1);
+    /* Instant show/hide: WebKitGTK blinks a frame when a GPU opacity transition ends */
+    visibility: hidden;
+    transition: background 120ms var(--ease-out);
   }
   .arrow :global(svg) { width: 22px; height: 22px; }
   .arrow.left { left: -8px; }
   .arrow.right { right: -8px; }
-  .arrow:hover { background: oklch(0.24 0.005 25); }
-  .shelf-wrap:hover .arrow { opacity: 1; }
-  :global(.shelf-wrap.at-start) .arrow.left, :global(.shelf-wrap.at-end) .arrow.right { opacity: 0; pointer-events: none; }
+  .arrow:hover { background: oklch(var(--n240)); }
+  .shelf-wrap:hover .arrow { visibility: visible; }
+  :global(.shelf-wrap.at-start) .arrow.left, :global(.shelf-wrap.at-end) .arrow.right { visibility: hidden; pointer-events: none; }
   .shelf-row .card { flex: 0 0 auto; width: calc(var(--h) * var(--a)); scroll-snap-align: start; }
 
   /* ── Category view ── */
@@ -1737,7 +1738,7 @@
   }
   .subchip em { font-style: normal; font-size: 0.75rem; color: var(--color-text-muted); }
   .subchip:hover { background: var(--color-hover); }
-  .subchip.add { background: none; box-shadow: inset 0 0 0 1px oklch(1 0 0 / 0.14); color: var(--color-text-muted); }
+  .subchip.add { background: none; box-shadow: inset 0 0 0 1px oklch(var(--n1000) / 0.14); color: var(--color-text-muted); }
   .subchip.add :global(svg) { width: 15px; height: 15px; }
   .subchip.add:hover { color: var(--color-text); }
 
@@ -1764,13 +1765,14 @@
     aspect-ratio: var(--a);
     border-radius: 10px;
     overflow: hidden;
-    background: oklch(0.22 0.005 25);
-    box-shadow: 0 0 0 1px oklch(1 0 0 / 0.06);
-    transition: transform 220ms var(--ease-out), box-shadow 220ms var(--ease-out);
+    background: oklch(var(--n220));
+    box-shadow: 0 0 0 1px oklch(var(--n1000) / 0.06);
+    /* Paint-only lift (top, not transform): WebKitGTK blinks when a GPU transition ends */
+    top: 0;
+    transition: top 220ms var(--ease-out), box-shadow 220ms var(--ease-out);
   }
-  .thumb img { width: 100%; height: 100%; object-fit: cover; transition: transform 400ms var(--ease-out); }
-  .card:hover .thumb { transform: translateY(-3px); box-shadow: 0 18px 36px -14px oklch(0 0 0 / 0.75), 0 0 0 1px oklch(1 0 0 / 0.14); }
-  .card:hover .thumb img { transform: scale(1.04); }
+  .thumb img { width: 100%; height: 100%; object-fit: cover; }
+  .card:hover .thumb { top: -3px; box-shadow: 0 18px 36px -14px oklch(0 0 0 / 0.75), 0 0 0 1px oklch(var(--n1000) / 0.14); }
   .thumb:focus-visible { outline: 3px solid var(--color-text); outline-offset: 2px; }
   .card.sel .thumb { box-shadow: 0 0 0 3px var(--color-accent); transform: scale(0.97); }
   .card.editing .thumb { box-shadow: 0 0 0 2px var(--color-text); }
@@ -1782,7 +1784,7 @@
     place-items: center;
     background:
       radial-gradient(circle at 30% 20%, color-mix(in oklch, var(--c) 35%, transparent), transparent 60%),
-      oklch(0.2 0.005 25);
+      oklch(var(--n200));
     color: color-mix(in oklch, var(--c) 70%, white);
   }
   .ph :global(svg) { width: 34px; height: 34px; opacity: 0.7; }
@@ -1795,7 +1797,6 @@
     inset: 0;
     background: linear-gradient(to top, oklch(0 0 0 / 0.75), transparent 45%), linear-gradient(to bottom, oklch(0 0 0 / 0.35), transparent 30%);
     opacity: 0.8;
-    transition: opacity 200ms var(--ease-out);
   }
   .card:hover .shade { opacity: 1; }
   .plat {
@@ -1808,7 +1809,7 @@
     padding: 3px 7px 3px 6px;
     border-radius: 4px;
     background: oklch(0 0 0 / 0.55);
-    color: oklch(0.95 0.003 25);
+    color: oklch(var(--n950));
     font-size: 0.6875rem;
     font-weight: 700;
     line-height: 1.2;
@@ -1821,7 +1822,7 @@
     padding: 2px 6px;
     border-radius: 4px;
     background: oklch(0 0 0 / 0.7);
-    color: oklch(0.97 0.003 25);
+    color: oklch(var(--n970));
     font-size: 0.75rem;
     font-weight: 700;
     font-variant-numeric: tabular-nums;
@@ -1835,15 +1836,14 @@
     display: grid;
     place-items: center;
     border-radius: 50%;
-    background: oklch(0.97 0.003 25 / 0.92);
-    color: oklch(0.16 0.004 25);
-    opacity: 0;
-    transform: translate(-50%, -50%) scale(0.85);
-    transition: opacity 180ms var(--ease-out), transform 180ms var(--ease-out);
+    background: oklch(var(--n970) / 0.92);
+    color: oklch(var(--n160));
+    visibility: hidden;
+    transform: translate(-50%, -50%);
     box-shadow: 0 10px 30px -6px oklch(0 0 0 / 0.6);
   }
   .playbtn :global(svg) { width: 22px; height: 22px; margin-left: 3px; }
-  .card:hover .playbtn, .thumb:focus-visible .playbtn, .playbtn.show { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  .card:hover .playbtn, .thumb:focus-visible .playbtn, .playbtn.show { visibility: visible; }
   .hover-meta {
     position: absolute;
     left: 10px;
@@ -1855,7 +1855,7 @@
     text-align: start;
   }
   .hover-meta b { font-size: 0.8125rem; font-weight: 700; line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 3; line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-  .hover-meta i { font-style: normal; font-size: 0.6875rem; font-weight: 600; color: oklch(0.85 0.004 25); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .hover-meta i { font-style: normal; font-size: 0.6875rem; font-weight: 600; color: oklch(var(--n850)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   /* Tall cards show their title on the picture, like reels apps */
   .card.portrait .hover-meta { display: flex; }
   .card.portrait .dur { top: 8px; right: 8px; bottom: auto; }
@@ -1873,7 +1873,7 @@
     place-items: center;
     border-radius: 50%;
     background: oklch(0 0 0 / 0.45);
-    box-shadow: inset 0 0 0 2px oklch(1 0 0 / 0.85);
+    box-shadow: inset 0 0 0 2px oklch(var(--n1000) / 0.85);
     color: var(--color-on-accent);
   }
   .check :global(svg) { width: 15px; height: 15px; }
@@ -1886,8 +1886,9 @@
     right: 6px;
     display: flex;
     gap: 4px;
+    /* Instant (no opacity transition: WebKitGTK blinks a frame when one ends); opacity
+       rather than visibility keeps the buttons reachable with Tab */
     opacity: 0;
-    transition: opacity 150ms var(--ease-out);
   }
   .card:hover .tools, .card:focus-within .tools { opacity: 1; }
   .card.portrait .tools { top: 34px; flex-direction: column; }
@@ -1898,11 +1899,11 @@
     place-items: center;
     border-radius: 50%;
     background: oklch(0 0 0 / 0.6);
-    color: oklch(0.97 0.003 25);
-    transition: background 120ms var(--ease-out), transform 120ms var(--ease-out);
+    color: oklch(var(--n970));
+    transition: background 120ms var(--ease-out);
   }
   .tool :global(svg) { width: 15px; height: 15px; }
-  .tool:hover { background: oklch(0 0 0 / 0.85); transform: scale(1.08); }
+  .tool:hover { background: oklch(0 0 0 / 0.85); }
   .tool:focus-visible { outline: 2px solid var(--color-text); }
   .tool.on { color: var(--color-accent-soft); }
   /* A favorite's heart stays visible */
@@ -1923,7 +1924,7 @@
     gap: 7px;
     padding: 12px;
     border-radius: 10px;
-    background: oklch(0.13 0.004 25 / 0.94);
+    background: oklch(var(--n130) / 0.94);
     box-shadow: 0 0 0 2px var(--color-accent);
     text-align: center;
   }
@@ -1956,7 +1957,7 @@
     height: var(--h);
     flex: var(--a) 1 calc(var(--h) * var(--a));
     border-radius: 10px;
-    background: linear-gradient(100deg, oklch(0.2 0.005 25) 40%, oklch(0.25 0.005 25) 50%, oklch(0.2 0.005 25) 60%) 0 0 / 300% 100%;
+    background: linear-gradient(100deg, oklch(var(--n200)) 40%, oklch(var(--n250)) 50%, oklch(var(--n200)) 60%) 0 0 / 300% 100%;
     animation: shimmer 1.4s linear infinite;
   }
   @keyframes shimmer { to { background-position: -150% 0; } }
@@ -1982,8 +1983,8 @@
     width: 74px;
     height: 132px;
     border-radius: 10px;
-    background: linear-gradient(160deg, oklch(0.32 0.03 27), oklch(0.2 0.01 25));
-    box-shadow: 0 16px 30px -12px oklch(0 0 0 / 0.7), inset 0 0 0 1px oklch(1 0 0 / 0.08);
+    background: linear-gradient(160deg, oklch(0.32 0.03 27), oklch(var(--n200)));
+    box-shadow: 0 16px 30px -12px oklch(0 0 0 / 0.7), inset 0 0 0 1px oklch(var(--n1000) / 0.08);
   }
   .empty-art span:nth-child(1) { left: 6px; transform: rotate(-10deg); }
   .empty-art span:nth-child(2) { left: 58px; bottom: 12px; z-index: 1; background: linear-gradient(160deg, var(--color-accent), oklch(0.36 0.14 27)); }
@@ -2013,10 +2014,9 @@
     aspect-ratio: var(--a);
     border-radius: 10px;
     overflow: hidden;
-    background: oklch(0.14 0.004 25);
+    background: oklch(var(--n140));
   }
   .ed-shot img { width: 100%; height: 100%; object-fit: cover; }
-  .ed-shot:hover .playbtn { transform: translate(-50%, -50%) scale(1.06); }
 
   .fld { display: flex; flex-direction: column; gap: 6px; }
   .fld > span { font-size: 0.75rem; font-weight: 700; color: var(--color-text-muted); }
@@ -2053,12 +2053,12 @@
     height: 28px;
     padding: 0 4px 0 10px;
     border-radius: 14px;
-    background: oklch(1 0 0 / 0.1);
+    background: oklch(var(--n1000) / 0.1);
     font-size: 0.8125rem;
     font-weight: 600;
   }
   .tchip button { width: 20px; height: 20px; display: grid; place-items: center; border-radius: 50%; background: none; color: var(--color-text-muted); }
-  .tchip button:hover { background: oklch(1 0 0 / 0.15); color: var(--color-text); }
+  .tchip button:hover { background: oklch(var(--n1000) / 0.15); color: var(--color-text); }
   .tchip :global(svg) { width: 10px; height: 10px; }
   .suggest { display: flex; flex-wrap: wrap; gap: 5px; }
   .suggest button {
@@ -2066,12 +2066,12 @@
     padding: 0 9px;
     border-radius: 13px;
     background: none;
-    box-shadow: inset 0 0 0 1px oklch(1 0 0 / 0.14);
+    box-shadow: inset 0 0 0 1px oklch(var(--n1000) / 0.14);
     color: var(--color-text-muted);
     font-size: 0.75rem;
     font-weight: 600;
   }
-  .suggest button:hover { color: var(--color-text); background: oklch(1 0 0 / 0.06); }
+  .suggest button:hover { color: var(--color-text); background: oklch(var(--n1000) / 0.06); }
   .fav-row {
     display: flex;
     align-items: center;
@@ -2079,7 +2079,7 @@
     height: 40px;
     padding: 0 12px;
     border-radius: 8px;
-    background: oklch(1 0 0 / 0.06);
+    background: oklch(var(--n1000) / 0.06);
     color: var(--color-text);
     font-size: 0.875rem;
     font-weight: 700;
@@ -2106,28 +2106,28 @@
     gap: 8px;
     padding: 8px 8px 8px 16px;
     border-radius: 12px;
-    background: oklch(0.24 0.005 25);
-    box-shadow: 0 24px 50px -16px oklch(0 0 0 / 0.85), 0 0 0 1px oklch(1 0 0 / 0.1);
+    background: oklch(var(--n240));
+    box-shadow: 0 24px 50px -16px oklch(0 0 0 / 0.85), 0 0 0 1px oklch(var(--n1000) / 0.1);
   }
   .bulk-n { font-size: 0.875rem; color: var(--color-text-muted); white-space: nowrap; }
   .bulk-n b { color: var(--color-text); font-variant-numeric: tabular-nums; }
   .link { background: none; color: var(--color-text-muted); font-size: 0.8125rem; font-weight: 700; white-space: nowrap; }
   .link:hover { color: var(--color-text); }
-  .sep { width: 1px; height: 24px; background: oklch(1 0 0 / 0.12); margin: 0 4px; }
-  .bulk { --dd-h: 36px; --dd-bg: oklch(1 0 0 / 0.08); --dd-border: transparent; }
+  .sep { width: 1px; height: 24px; background: oklch(var(--n1000) / 0.12); margin: 0 4px; }
+  .bulk { --dd-h: 36px; --dd-bg: oklch(var(--n1000) / 0.08); --dd-border: transparent; }
   .bulk-tags input {
     width: 150px;
     height: 36px;
     padding: 0 10px;
     border-radius: 8px;
     border: none;
-    background: oklch(1 0 0 / 0.08);
+    background: oklch(var(--n1000) / 0.08);
     color: var(--color-text);
     font-size: 0.8125rem;
   }
   .ib { width: 36px; height: 36px; display: grid; place-items: center; border-radius: 8px; background: none; color: var(--color-text); }
   .ib :global(svg) { width: 18px; height: 18px; }
-  .ib:hover { background: oklch(1 0 0 / 0.1); }
+  .ib:hover { background: oklch(var(--n1000) / 0.1); }
   .ib:disabled, .bulk-tags input:disabled { opacity: 0.45; pointer-events: none; }
 
   .dropzone {
@@ -2137,7 +2137,7 @@
     display: grid;
     place-items: center;
     padding: 24px;
-    background: oklch(0.12 0.004 25 / 0.8);
+    background: oklch(var(--n120) / 0.8);
   }
   .dropzone > div {
     width: 100%;
@@ -2148,7 +2148,7 @@
     justify-content: center;
     gap: 10px;
     border-radius: 18px;
-    border: 2px dashed oklch(1 0 0 / 0.35);
+    border: 2px dashed oklch(var(--n1000) / 0.35);
     color: var(--color-text-muted);
   }
   .dropzone :global(svg) { width: 52px; height: 52px; color: var(--color-text); }
@@ -2164,7 +2164,7 @@
     padding: 11px 16px;
     border-radius: 8px;
     background: var(--color-text);
-    color: oklch(0.16 0.004 25);
+    color: oklch(var(--n160));
     font-size: 0.875rem;
     font-weight: 700;
     box-shadow: 0 18px 40px -12px oklch(0 0 0 / 0.7);
@@ -2190,9 +2190,8 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .thumb, .thumb img, .playbtn, .see-all :global(svg) { transition: none; }
-    .card:hover .thumb { transform: none; }
-    .card:hover .thumb img { transform: none; }
+    .thumb { transition: none; }
+    .card:hover .thumb { top: 0; }
     .skeleton span, .spin { animation: none; }
   }
 </style>

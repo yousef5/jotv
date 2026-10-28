@@ -76,7 +76,7 @@
     align-items: center;
     justify-content: center;
     color: var(--color-text-muted);
-    transition: transform var(--transition-fast);
+    /* Turns instantly: a transform transition blinks a frame in WebKitGTK when it ends */
     flex-shrink: 0;
   }
 

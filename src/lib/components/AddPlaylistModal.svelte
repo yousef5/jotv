@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
+  import { jsFade } from '$lib/motion';
   import { listen } from '@tauri-apps/api/event';
   import { addPlaylistFromUrl, addPlaylistFromFile, addPlaylistFromXtream } from '$lib/tauri';
   import { loadPlaylists } from '$lib/stores/playlists';
@@ -67,7 +68,7 @@
 </script>
 
 <div class="modal-backdrop" role="button" tabindex="-1" onclick={handleBackdropClick} onkeydown={(e) => { if (e.key === 'Escape') onclose(); }}>
-  <div class="modal fade-in">
+  <div class="modal" in:jsFade={{ duration: 300 }}>
     <div class="modal-header">
       <h2>Add Playlist</h2>
       <button class="close-btn" onclick={onclose} title="Close">
@@ -117,12 +118,12 @@
   .modal-backdrop {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.6);
+    /* No backdrop-filter blur: it makes WebKitGTK repaint slowly */
+    background: rgba(0, 0, 0, 0.75);
     display: flex;
     align-items: center;
     justify-content: center;
     z-index: 200;
-    backdrop-filter: blur(4px);
   }
 
   .modal {

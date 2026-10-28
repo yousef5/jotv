@@ -108,12 +108,12 @@
     height: 28px;
     padding: 0 4px 0 10px;
     border-radius: 14px;
-    background: oklch(1 0 0 / 0.1);
+    background: oklch(var(--n1000) / 0.1);
     font-size: 0.8125rem;
     font-weight: 600;
   }
   .chip button { width: 20px; height: 20px; display: grid; place-items: center; border-radius: 50%; background: none; color: var(--color-text-muted); }
-  .chip button:hover { background: oklch(1 0 0 / 0.16); color: var(--color-text); }
+  .chip button:hover { background: oklch(var(--n1000) / 0.16); color: var(--color-text); }
   .chip svg { width: 10px; height: 10px; }
   .suggest { display: flex; flex-wrap: wrap; gap: 5px; }
   .suggest button {
@@ -121,10 +121,10 @@
     padding: 0 10px;
     border-radius: 13px;
     background: none;
-    box-shadow: inset 0 0 0 1px oklch(1 0 0 / 0.14);
+    box-shadow: inset 0 0 0 1px oklch(var(--n1000) / 0.14);
     color: var(--color-text-muted);
     font-size: 0.75rem;
     font-weight: 600;
   }
-  .suggest button:hover { color: var(--color-text); background: oklch(1 0 0 / 0.06); }
+  .suggest button:hover { color: var(--color-text); background: oklch(var(--n1000) / 0.06); }
 </style>

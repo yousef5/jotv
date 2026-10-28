@@ -8,7 +8,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { get } from 'svelte/store';
-  import { fade } from 'svelte/transition';
+  import { jsFade } from '$lib/motion';
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
   import { getChannel, getSeriesInfo, mpvPause, setSetting } from '$lib/tauri';
@@ -267,7 +267,7 @@
 
   <footer class="controls">
     {#if countdown !== null && next}
-      <div class="upnext" transition:fade={{ duration: 150 }}>
+      <div class="upnext" transition:jsFade={{ duration: 150 }}>
         <span>Next episode <b>{next.subtitle}</b> in {countdown}s</span>
         <button class="btn" onclick={playNext}>Play now</button>
         <button class="btn ghost" onclick={cancelCountdown}>Cancel</button>
@@ -348,10 +348,10 @@
     </div>
 
     {#if showTracks}
-      <div transition:fade={{ duration: 120 }}><TrackPanel /></div>
+      <div transition:jsFade={{ duration: 120 }}><TrackPanel /></div>
     {/if}
     {#if showHint}
-      <dl class="keys" transition:fade={{ duration: 120 }}>
+      <dl class="keys" transition:jsFade={{ duration: 120 }}>
         <div><dt>Space</dt><dd>Play / pause</dd></div>
         <div><dt>← →</dt><dd>Back / forward 10s</dd></div>
         <div><dt>↑ ↓</dt><dd>Volume</dd></div>
@@ -371,7 +371,7 @@
     height: 100vh;
     display: grid;
     grid-template-rows: auto minmax(0, 1fr) auto;
-    background: oklch(0.08 0.003 25);
+    background: oklch(var(--n80));
     color: var(--color-text);
   }
 
@@ -425,8 +425,8 @@
     flex-direction: column;
     gap: 6px;
     padding: 10px 20px 14px;
-    background: oklch(0.12 0.004 25);
-    box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.06);
+    background: oklch(var(--n120));
+    box-shadow: inset 0 1px 0 oklch(var(--n1000) / 0.06);
   }
 
   .seek { display: flex; align-items: center; gap: 14px; }
@@ -435,7 +435,7 @@
     font-size: 0.8125rem;
     font-weight: 700;
     font-variant-numeric: tabular-nums;
-    color: oklch(0.85 0.004 25);
+    color: oklch(var(--n850));
   }
   .time:last-child { text-align: end; }
   .seek input {
@@ -446,7 +446,7 @@
     padding: 0;
     border: none;
     border-radius: 3px;
-    background: linear-gradient(to right, var(--color-accent) var(--fill), oklch(1 0 0 / 0.2) var(--fill));
+    background: linear-gradient(to right, var(--color-accent) var(--fill), oklch(var(--n1000) / 0.2) var(--fill));
     cursor: pointer;
     transition: height 120ms var(--ease-out);
   }
@@ -483,34 +483,33 @@
     place-items: center;
     border-radius: 8px;
     background: none;
-    color: oklch(0.9 0.004 25);
+    color: oklch(var(--n900));
     transition: background 120ms var(--ease-out), color 120ms var(--ease-out);
   }
   .ib > :global(svg) { width: 24px; height: 24px; }
   .ib.big > :global(svg) { width: 28px; height: 28px; }
-  .ib:hover { background: oklch(1 0 0 / 0.08); color: var(--color-text); }
-  .ib:active { transform: scale(0.94); }
+  .ib:hover { background: oklch(var(--n1000) / 0.08); color: var(--color-text); }
   .ib:focus-visible { outline: 2px solid var(--color-text); outline-offset: -2px; }
-  .ib.on { background: oklch(1 0 0 / 0.1); }
+  .ib.on { background: oklch(var(--n1000) / 0.1); }
   /* Tooltips open upward, over the seek row (the video is further up) */
   .row .ib[data-tip]::after {
     content: attr(data-tip);
     position: absolute;
     bottom: calc(100% + 8px);
     left: 50%;
-    transform: translate(-50%, 4px);
+    transform: translate(-50%, 0);
     padding: 6px 10px;
     border-radius: 4px;
     background: var(--color-text);
-    color: oklch(0.14 0.004 25);
+    color: oklch(var(--n140));
     font-size: 0.75rem;
     font-weight: 700;
     white-space: nowrap;
-    opacity: 0;
+    /* Instant show/hide: WebKitGTK blinks a frame when a GPU opacity/transform transition ends */
+    visibility: hidden;
     pointer-events: none;
-    transition: opacity 120ms var(--ease-out), transform 120ms var(--ease-out);
   }
-  .row .ib:hover::after, .row .ib:focus-visible::after { opacity: 1; transform: translate(-50%, 0); }
+  .row .ib:hover::after, .row .ib:focus-visible::after { visibility: visible; }
 
   .vol { display: inline-flex; align-items: center; gap: 4px; margin-left: 4px; }
   .vol-slider {
@@ -521,7 +520,7 @@
     padding: 0;
     border: none;
     border-radius: 2px;
-    background: linear-gradient(to right, var(--color-text) var(--fill), oklch(1 0 0 / 0.2) var(--fill));
+    background: linear-gradient(to right, var(--color-text) var(--fill), oklch(var(--n1000) / 0.2) var(--fill));
     cursor: pointer;
   }
   .vol-slider::-webkit-slider-thumb {
@@ -540,7 +539,7 @@
     height: 40px;
     padding: 0 16px 0 12px;
     border-radius: 6px;
-    background: oklch(1 0 0 / 0.1);
+    background: oklch(var(--n1000) / 0.1);
     color: var(--color-text);
     font-size: 0.875rem;
     font-weight: 700;
@@ -548,7 +547,7 @@
   }
   .next :global(svg) { width: 18px; height: 18px; }
   .next small { color: var(--color-text-muted); font-weight: 600; }
-  .next:hover { background: oklch(1 0 0 / 0.18); }
+  .next:hover { background: oklch(var(--n1000) / 0.18); }
 
   .upnext {
     display: flex;
@@ -567,11 +566,11 @@
     padding: 0 16px;
     border-radius: 6px;
     background: var(--color-text);
-    color: oklch(0.14 0.004 25);
+    color: oklch(var(--n140));
     font-size: 0.875rem;
     font-weight: 700;
   }
-  .btn.ghost { background: oklch(1 0 0 / 0.1); color: var(--color-text); }
+  .btn.ghost { background: oklch(var(--n1000) / 0.1); color: var(--color-text); }
 
   .keys {
     display: grid;
@@ -585,7 +584,7 @@
   .keys dt {
     padding: 2px 7px;
     border-radius: 4px;
-    background: oklch(1 0 0 / 0.08);
+    background: oklch(var(--n1000) / 0.08);
     color: var(--color-text);
     font-size: 0.6875rem;
     font-weight: 700;
@@ -596,7 +595,7 @@
     width: 44px;
     height: 44px;
     border-radius: 50%;
-    border: 4px solid oklch(1 0 0 / 0.12);
+    border: 4px solid oklch(var(--n1000) / 0.12);
     border-top-color: var(--color-accent);
     animation: spin 800ms linear infinite;
   }

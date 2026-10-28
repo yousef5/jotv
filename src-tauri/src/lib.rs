@@ -1,6 +1,7 @@
 pub mod commands;
 pub mod db;
 pub mod parsers;
+pub mod tools;
 
 use commands::downloads::DownloadManager;
 use commands::mpv_player::MpvState;
@@ -106,6 +107,7 @@ pub fn run() {
             // Player
             commands::player::launch_external_player,
             commands::player::detect_external_players,
+            commands::system::system_check,
             // MPV Player
             commands::mpv_player::mpv_play,
             commands::mpv_player::mpv_load,

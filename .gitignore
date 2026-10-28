@@ -23,3 +23,9 @@ Thumbs.db
 # Vite
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# Arch packaging (makepkg output and the .deb it repackages)
+packaging/arch/*.deb
+packaging/arch/*.pkg.tar.*
+packaging/arch/src/
+packaging/arch/pkg/

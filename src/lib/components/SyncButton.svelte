@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { fly } from 'svelte/transition';
+  import { jsFly } from '$lib/motion';
   import { goto } from '$app/navigation';
   import { syncState, syncPlaylists } from '$lib/stores/sync';
   import type { SyncPhase } from '$lib/stores/sync';
@@ -151,7 +151,7 @@
   </button>
 
   {#if open && ($syncState.running || summary || $syncState.error)}
-    <div class="panel" role="status" aria-live="polite" transition:fly={{ y: -6, duration: 160 }}>
+    <div class="panel" role="status" aria-live="polite" transition:jsFly={{ y: -6, duration: 160 }}>
       <header class="panel-head">
         <div>
           <strong>
@@ -231,10 +231,9 @@
     padding: 0 14px 0 11px;
     border-radius: 999px;
     overflow: hidden;
-    background: oklch(0.13 0.004 25 / 0.55);
-    box-shadow: inset 0 0 0 1px oklch(1 0 0 / 0.14);
-    backdrop-filter: blur(14px);
-    -webkit-backdrop-filter: blur(14px);
+    /* No backdrop-filter: it makes WebKitGTK repaint slowly */
+    background: oklch(var(--n130) / 0.88);
+    box-shadow: inset 0 0 0 1px oklch(var(--n1000) / 0.14);
     color: var(--color-text);
     font-size: 0.8125rem;
     font-weight: 600;
@@ -242,19 +241,18 @@
     white-space: nowrap;
     transition: background 200ms var(--ease-out), box-shadow 200ms var(--ease-out);
   }
-  .sync:hover { background: oklch(0.22 0.005 25 / 0.75); box-shadow: inset 0 0 0 1px oklch(1 0 0 / 0.28); }
+  .sync:hover { background: oklch(var(--n220) / 0.92); box-shadow: inset 0 0 0 1px oklch(var(--n1000) / 0.28); }
   .sync:focus-visible { outline: 2px solid var(--color-text); outline-offset: 2px; }
 
   .icon { display: grid; place-items: center; width: 18px; height: 18px; }
   .icon :global(svg) { width: 18px; height: 18px; }
-  .sync:hover:not(.running) .icon :global(svg) { transform: rotate(90deg); transition: transform 400ms var(--ease-out); }
   .running .icon :global(svg) { animation: spin 900ms linear infinite; }
   .done { box-shadow: inset 0 0 0 1px oklch(0.76 0.13 165 / 0.5); }
   .done .icon { color: var(--color-accent-green); }
   .failed { box-shadow: inset 0 0 0 1px oklch(0.58 0.225 27 / 0.6); }
   .failed .icon { color: var(--color-accent-soft); }
 
-  .bar { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: oklch(1 0 0 / 0.08); }
+  .bar { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: oklch(var(--n1000) / 0.08); }
   .fill { display: block; height: 100%; background: var(--color-accent); transition: width 600ms var(--ease-out); }
 
   /* Panel */
@@ -266,10 +264,8 @@
     width: 340px;
     padding: 16px;
     border-radius: 12px;
-    background: oklch(0.18 0.005 25 / 0.96);
-    backdrop-filter: blur(18px);
-    -webkit-backdrop-filter: blur(18px);
-    box-shadow: 0 24px 60px -16px oklch(0 0 0 / 0.85), 0 0 0 1px oklch(1 0 0 / 0.08);
+    background: oklch(var(--n180) / 0.97);
+    box-shadow: 0 24px 60px -16px oklch(0 0 0 / 0.85), 0 0 0 1px oklch(var(--n1000) / 0.08);
     color: var(--color-text);
     text-align: start;
   }
@@ -286,7 +282,7 @@
     background: none;
     color: var(--color-text-muted);
   }
-  .close:hover { background: oklch(1 0 0 / 0.08); color: var(--color-text); }
+  .close:hover { background: oklch(var(--n1000) / 0.08); color: var(--color-text); }
   .close :global(svg) { width: 14px; height: 14px; }
 
   .steps { list-style: none; display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px; }
@@ -299,16 +295,16 @@
     display: grid;
     place-items: center;
     border-radius: 50%;
-    box-shadow: inset 0 0 0 2px oklch(1 0 0 / 0.18);
+    box-shadow: inset 0 0 0 2px oklch(var(--n1000) / 0.18);
   }
-  .done .dot { background: var(--color-accent-green); box-shadow: none; color: oklch(0.14 0.004 25); }
+  .done .dot { background: var(--color-accent-green); box-shadow: none; color: oklch(var(--n140)); }
   .done .dot :global(svg) { width: 12px; height: 12px; }
   .active .dot { box-shadow: none; }
   .spin {
     width: 18px;
     height: 18px;
     border-radius: 50%;
-    border: 2.5px solid oklch(1 0 0 / 0.15);
+    border: 2.5px solid oklch(var(--n1000) / 0.15);
     border-top-color: var(--color-accent);
     animation: spin 800ms linear infinite;
   }
@@ -319,7 +315,7 @@
   .step-text small { font-size: 0.75rem; color: var(--color-text-muted); font-variant-numeric: tabular-nums; }
 
   .progress { display: flex; align-items: center; gap: 10px; }
-  .track { flex: 1; height: 6px; border-radius: 3px; background: oklch(1 0 0 / 0.1); overflow: hidden; }
+  .track { flex: 1; height: 6px; border-radius: 3px; background: oklch(var(--n1000) / 0.1); overflow: hidden; }
   .track .fill { border-radius: 3px; }
   .pct { min-width: 36px; text-align: end; font-size: 0.8125rem; font-weight: 800; font-variant-numeric: tabular-nums; }
 
@@ -335,7 +331,7 @@
   .changes li {
     padding: 10px 12px;
     border-radius: 8px;
-    background: oklch(1 0 0 / 0.05);
+    background: oklch(var(--n1000) / 0.05);
     font-size: 0.8125rem;
     color: var(--color-text-muted);
   }
@@ -347,14 +343,14 @@
     flex: 1;
     height: 36px;
     border-radius: 6px;
-    background: oklch(1 0 0 / 0.1);
+    background: oklch(var(--n1000) / 0.1);
     color: var(--color-text);
     font-size: 0.8125rem;
     font-weight: 700;
   }
-  .actions button:hover { background: oklch(1 0 0 / 0.16); }
-  .actions .primary { background: var(--color-text); color: oklch(0.14 0.004 25); }
-  .actions .primary:hover { background: oklch(0.85 0.004 25); }
+  .actions button:hover { background: oklch(var(--n1000) / 0.16); }
+  .actions .primary { background: var(--color-text); color: oklch(var(--n140)); }
+  .actions .primary:hover { background: oklch(var(--n850)); }
 
   @keyframes spin { to { transform: rotate(360deg); } }
 

@@ -6,18 +6,24 @@
 
   // Last loaded list, so going back restores every page that infinite scroll fetched
   let listCache: { key: string; items: Tile[]; hasMore: boolean } | null = null;
+
+  // Grouped view rows, kept across navigation so going back doesn't refetch
+  const rowCache = new Map<string, Channel[]>();
 </script>
 
 <script lang="ts">
   import { onMount } from 'svelte';
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
-  import { browseMedia, getMediaFacets, getGroupsByType, searchChannelsInPlaylist } from '$lib/tauri';
+  import { browseMedia, getMediaFacets, getGroupsByType, getChannelsByGroup, searchChannelsInPlaylist } from '$lib/tauri';
   import type { ChannelGroup, MediaSort, MediaFacets } from '$lib/tauri';
   import { playlists, loadPlaylists, RECENTLY_ADDED_GROUP } from '$lib/stores/playlists';
   import { splitTitle } from '$lib/playback';
   import { syncState } from '$lib/stores/sync';
   import { mainScrollSnapshot } from '$lib/scroll';
+  import Hero from '$lib/components/Hero.svelte';
+  import { jsFade } from '$lib/motion';
+  import MediaRow from '$lib/components/MediaRow.svelte';
 
   export const snapshot = mainScrollSnapshot;
 
@@ -88,13 +94,107 @@
   );
 
   // Keep the selected category visible in the side panel
+  // Show the selected category: scroll the sheet itself, never scrollIntoView
+  // (that also scrolls ancestors and shakes the page)
   $effect(() => {
-    group;
-    groups.length;
-    queueMicrotask(() => railEl?.querySelector<HTMLElement>('.cat.on')?.scrollIntoView({ block: 'nearest' }));
+    if (!sheetOpen || !railEl) return;
+    const on = railEl.querySelector<HTMLElement>('.cat.on');
+    if (on && !on.classList.contains('new')) railEl.scrollTop = on.offsetTop - railEl.clientHeight / 2;
   });
   let shown = $derived<Tile[]>(q ? results : items);
   let ambient = $derived(shown.find((c) => c.logo_url)?.logo_url ?? null);
+
+  // Billboard of the newest titles on the plain "All movies / All series" view
+  let heroItems = $derived(
+    !q && isRecent && sort === 'added' && !filtered && !loading ? items.filter((c) => c.logo_url).slice(0, 6) : [],
+  );
+  let heroIndex = $state(0);
+
+  /** Plain "All movies" view: billboard + rows instead of one long grid */
+  let grouped = $derived(!q && isRecent && sort === 'added' && !filtered && !$page.url.searchParams.has('all'));
+  const ROW_GROUPS = 14;
+  let rowGroups = $derived(sortedGroups.slice(0, ROW_GROUPS));
+  let rows = $state<Record<string, Channel[]>>({});
+  let topRated = $state<Channel[]>([]);
+
+  let sheetOpen = $state(false);
+  let catInput = $state<HTMLInputElement | undefined>();
+
+  function rowKey(name: string) {
+    return `${pid}|${kind}|${name}|${$syncState.version}`;
+  }
+
+  /** Fetch a category row the first time it nears the viewport */
+  function lazyRow(node: HTMLElement, name: string) {
+    const io = new IntersectionObserver((entries) => {
+      if (!entries.some((e) => e.isIntersecting)) return;
+      io.disconnect();
+      const key = rowKey(name);
+      const hit = rowCache.get(key);
+      if (hit) return void (rows = { ...rows, [key]: hit });
+      getChannelsByGroup(pid, kind, name, 24, 0)
+        .then((r) => {
+          rowCache.set(key, r);
+          rows = { ...rows, [key]: r };
+        })
+        .catch(() => {});
+    }, { root: document.querySelector('main'), rootMargin: '600px 0px' });
+    io.observe(node);
+    return { destroy: () => io.disconnect() };
+  }
+
+  $effect(() => {
+    if (!grouped || !pid || !facets.rated) return void (topRated = []);
+    const key = rowKey('__top');
+    const hit = rowCache.get(key);
+    if (hit) return void (topRated = hit);
+    browseMedia(pid, kind, { sort: 'rating', minRating: 7 }, 30)
+      .then((r) => {
+        rowCache.set(key, r);
+        topRated = r;
+      })
+      .catch(() => {});
+  });
+
+  // The sheet slides by rAF, not a CSS transition: when an accelerated transition
+  // ends, WebKitGTK paints one frame at the start position and the sheet blinks.
+  const SHEET_MS = 200;
+  let sheetPos = 0; // 0 = hidden, 1 = open
+  let sheetRaf = 0;
+  $effect(() => {
+    const target = sheetOpen ? 1 : 0;
+    const el = railEl;
+    if (!el) return;
+    cancelAnimationFrame(sheetRaf);
+    const from = sheetPos;
+    if (from === target) return;
+    const t0 = performance.now();
+    const step = (now: number) => {
+      const k = Math.min(1, (now - t0) / (SHEET_MS * Math.abs(target - from)));
+      const eased = 1 - Math.pow(1 - k, 3);
+      sheetPos = from + (target - from) * eased;
+      el.style.transform = `translate3d(${(sheetPos - 1) * 104}%, 0, 0)`;
+      if (k < 1) sheetRaf = requestAnimationFrame(step);
+    };
+    sheetRaf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(sheetRaf);
+  });
+
+  function openSheet() {
+    sheetOpen = true;
+    // preventScroll: a plain focus() makes WebKit scroll the half-slid sheet into
+    // view, which yanks it (and the page text) sideways for a frame
+    catInput?.focus({ preventScroll: true });
+  }
+
+  function toItem(c: Channel) {
+    const t = splitTitle(c.name);
+    return { key: c.id, title: t.title, subtitle: t.year ?? undefined, image: c.logo_url };
+  }
+  $effect(() => {
+    kind;
+    heroIndex = 0;
+  });
 
   const nf = new Intl.NumberFormat('en-US');
 
@@ -230,18 +330,19 @@
     query = '';
     clearTimeout(debounce);
     setParams({ q: null }, true);
-    searchEl?.focus();
+    searchEl?.focus({ preventScroll: true });
   }
 
   function pickGroup(g: string) {
+    sheetOpen = false;
     query = '';
-    setParams({ group: g === RECENTLY_ADDED_GROUP ? null : g, q: null });
+    setParams({ group: g === RECENTLY_ADDED_GROUP ? null : g, q: null, all: null });
   }
 
   function pickKind(k: Kind) {
     if (k === kind) return;
     query = '';
-    setParams({ type: k, group: null, q: null, year: null, genre: null });
+    setParams({ type: k, group: null, q: null, year: null, genre: null, all: null });
   }
 
   function clearFilters() {
@@ -252,8 +353,14 @@
     const typing = e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement;
     if ((e.key === 'k' && (e.ctrlKey || e.metaKey)) || (e.key === '/' && !typing)) {
       e.preventDefault();
-      searchEl?.focus();
+      searchEl?.focus({ preventScroll: true });
       searchEl?.select();
+    } else if (e.key === 'c' && !typing && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.preventDefault();
+      sheetOpen ? (sheetOpen = false) : openSheet();
+    } else if (e.key === 'Escape' && sheetOpen) {
+      e.preventDefault();
+      sheetOpen = false;
     } else if (e.key === 'Escape' && e.target === searchEl && query) {
       e.preventDefault();
       clearSearch();
@@ -270,18 +377,28 @@
 <svelte:window onkeydown={onKey} />
 
 <div class="browse">
-  {#if ambient}
+  {#if !heroItems.length && ambient}
     {#key ambient}
-      <div class="ambient" aria-hidden="true" style:background-image="url('{ambient}')"></div>
+      <div class="ambient" aria-hidden="true" style:background-image="url('{ambient}')" in:jsFade={{ duration: 900 }}></div>
     {/key}
   {/if}
 
-  <header class="head" class:scrolled bind:clientHeight={headH}>
+  <header
+    class="head"
+    class:scrolled
+    class:overlay={heroItems.length > 0}
+    class:dark-zone={heroItems.length > 0 && !scrolled}
+    style:margin-bottom={heroItems.length ? `${-headH}px` : null}
+    bind:clientHeight={headH}
+  >
     <div class="head-row">
       <button class="back" onclick={back} aria-label="Back">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
       </button>
 
+      {#if heroItems.length}
+        <span class="brand" aria-hidden="true"><b>J</b>{Noun.toUpperCase()}</span>
+      {/if}
       <div class="titles">
         <h1 dir="auto">{q ? `“${q}”` : heading}</h1>
         <p>
@@ -294,6 +411,12 @@
           {/if}
         </p>
       </div>
+
+      <button class="cats-btn" onclick={openSheet} aria-haspopup="dialog" aria-expanded={sheetOpen}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="14" y2="18"/></svg>
+        Categories
+        <span class="cats-count">{groups.length}</span>
+      </button>
 
       <div class="kind" role="tablist" aria-label="Content type">
         <button role="tab" aria-selected={kind === 'vod'} class:on={kind === 'vod'} onclick={() => pickKind('vod')}>Movies</button>
@@ -325,28 +448,41 @@
 
   </header>
 
+  {#if heroItems.length}
+    <Hero items={heroItems} bind:index={heroIndex} label={`New ${noun}`} />
+  {/if}
+
+  {#if grouped}
+    <div class="rows">
+      {#if items.length}
+        <MediaRow title={`Just added`} items={items.slice(0, 30).map(toItem)} onselect={(i) => goto(`/title?id=${items[i].id}`)} onviewall={() => setParams({ all: '1' })} />
+      {/if}
+      {#if topRated.length >= 4}
+        <MediaRow title={`Top rated ${noun}`} items={topRated.map(toItem)} onselect={(i) => goto(`/title?id=${topRated[i].id}`)} onviewall={() => setParams({ sort: 'rating' })} />
+      {/if}
+      {#key `${pid}|${kind}`}
+      {#each rowGroups as g (g.name)}
+        {@const r = rows[rowKey(g.name)]}
+        <div class="lazy-row" use:lazyRow={g.name}>
+          {#if r?.length}
+            <MediaRow title={g.name} items={r.map(toItem)} onselect={(i) => goto(`/title?id=${r[i].id}`)} onviewall={() => pickGroup(g.name)} />
+          {:else if !r}
+            <div class="row-skel" aria-hidden="true">
+              <div class="sk sk-row-title"></div>
+              <div class="sk-tiles">{#each Array(9) as _, i (i)}<div class="sk sk-tile"></div>{/each}</div>
+            </div>
+          {/if}
+        </div>
+      {/each}
+      {/key}
+      {#if groups.length > ROW_GROUPS}
+        <div class="more-cats">
+          <button class="btn ghost" onclick={openSheet}>Browse all {groups.length} categories</button>
+        </div>
+      {/if}
+    </div>
+  {:else}
   <div class="layout">
-  <aside class="rail" bind:this={railEl} style:top="{headH - 24}px" style:max-height="calc(100vh - {headH}px)" aria-label="Categories">
-    <label class="cat-search">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="16.5" y1="16.5" x2="21" y2="21"/></svg>
-      <input bind:value={catFilter} placeholder="Find a category" aria-label="Find a category" dir="auto" />
-    </label>
-
-    <button class="cat new" class:on={isRecent && !q} aria-current={isRecent && !q ? 'true' : undefined} onclick={() => pickGroup(RECENTLY_ADDED_GROUP)}>
-      <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2l2.4 6.9H22l-6 4.6 2.3 7L12 16.3 5.7 20.5 8 13.5 2 8.9h7.6z"/></svg>
-      <span class="cat-name">All {noun}</span>
-    </button>
-
-    <p class="rail-label">Categories <span>{groups.length}</span></p>
-    {#each railGroups as g (g.name)}
-      <button class="cat" class:on={group === g.name && !q} aria-current={group === g.name && !q ? 'true' : undefined} onclick={() => pickGroup(g.name)} title={g.name}>
-        <span class="cat-name" dir="auto">{g.name}</span>
-        <span class="cat-count">{nf.format(g.count)}</span>
-      </button>
-    {:else}
-      <p class="rail-empty">No category matches “{catFilter.trim()}”</p>
-    {/each}
-  </aside>
 
   <section class="content">
     {#if !q}
@@ -445,6 +581,39 @@
     {/if}
   </section>
   </div>
+  {/if}
+
+  <!-- Categories sheet: always mounted so it opens instantly; slides on the GPU -->
+  {#if sheetOpen}
+    <button class="scrim" aria-label="Close categories" onclick={() => (sheetOpen = false)}></button>
+  {/if}
+  <aside class="sheet" class:open={sheetOpen} bind:this={railEl} aria-label="Categories" inert={!sheetOpen}>
+    <header class="sheet-head">
+      <h2>{Noun} categories</h2>
+      <button class="sheet-x" onclick={() => (sheetOpen = false)} aria-label="Close">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </header>
+    <label class="cat-search">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="16.5" y1="16.5" x2="21" y2="21"/></svg>
+      <input bind:this={catInput} bind:value={catFilter} placeholder="Find a category" aria-label="Find a category" dir="auto" />
+    </label>
+
+    <button class="cat new" class:on={isRecent && !q} aria-current={isRecent && !q ? 'true' : undefined} onclick={() => pickGroup(RECENTLY_ADDED_GROUP)}>
+      <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2l2.4 6.9H22l-6 4.6 2.3 7L12 16.3 5.7 20.5 8 13.5 2 8.9h7.6z"/></svg>
+      <span class="cat-name">All {noun}</span>
+    </button>
+
+    <p class="rail-label">Categories <span>{groups.length}</span></p>
+    {#each railGroups as g (g.name)}
+      <button class="cat" class:on={group === g.name && !q} aria-current={group === g.name && !q ? 'true' : undefined} onclick={() => pickGroup(g.name)} title={g.name}>
+        <span class="cat-name" dir="auto">{g.name}</span>
+        <span class="cat-count">{nf.format(g.count)}</span>
+      </button>
+    {:else}
+      <p class="rail-empty">No category matches “{catFilter.trim()}”</p>
+    {/each}
+  </aside>
 </div>
 
 <style>
@@ -475,9 +644,7 @@
     filter: blur(80px) saturate(1.6) brightness(0.5);
     opacity: 0.55;
     mask-image: linear-gradient(to bottom, black, transparent);
-    animation: ambientIn 900ms var(--ease-out);
   }
-  @keyframes ambientIn { from { opacity: 0; } }
 
   /* ── Header ─────────────────────────────────────────────────────────── */
 
@@ -490,10 +657,8 @@
     transition: background 250ms var(--ease-out), box-shadow 250ms var(--ease-out);
   }
   .head.scrolled {
-    background: oklch(0.15 0.004 25 / 0.92);
-    backdrop-filter: blur(18px) saturate(1.4);
-    -webkit-backdrop-filter: blur(18px) saturate(1.4);
-    box-shadow: 0 1px 0 oklch(1 0 0 / 0.06), 0 20px 40px -24px oklch(0 0 0 / 0.8);
+    background: oklch(var(--n140) / 0.97);
+    box-shadow: 0 1px 0 oklch(var(--n1000) / 0.06), 0 20px 40px -24px oklch(0 0 0 / 0.8);
   }
 
   .head-row {
@@ -502,6 +667,31 @@
     gap: 18px;
   }
 
+  /* Over the billboard: a slim transparent nav that turns to glass on scroll */
+  .head.overlay {
+    padding-top: 16px;
+    padding-bottom: 14px;
+    background: linear-gradient(to bottom, oklch(var(--n100) / 0.7), transparent);
+  }
+  .head.overlay.scrolled { background: oklch(var(--n130) / 0.96); }
+  .head.overlay .back,
+  .head.overlay .titles { display: none; }
+  .head.overlay .head-row { gap: 12px; }
+  .head.overlay .kind { margin-right: auto; order: -1; }
+  .head.overlay .brand { order: -2; }
+  .head.overlay .search { flex: 0 1 340px; }
+  .brand {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 6px;
+    margin-right: 6px;
+    font-size: 0.75rem;
+    font-weight: 800;
+    letter-spacing: 0.3em;
+    color: var(--color-text);
+  }
+  .brand b { font-size: 1.5rem; font-weight: 900; letter-spacing: -0.04em; color: var(--color-accent); }
+
   .back {
     flex-shrink: 0;
     width: 44px;
@@ -509,12 +699,12 @@
     display: grid;
     place-items: center;
     border-radius: 50%;
-    background: oklch(1 0 0 / 0.08);
+    background: oklch(var(--n1000) / 0.08);
     color: var(--color-text);
-    transition: background 200ms var(--ease-out), transform 200ms var(--ease-out);
+    transition: background 200ms var(--ease-out);
   }
   .back :global(svg) { width: 22px; height: 22px; }
-  .back:hover { background: oklch(1 0 0 / 0.16); transform: translateX(-2px); }
+  .back:hover { background: oklch(var(--n1000) / 0.16); }
   .back:focus-visible { outline: 2px solid var(--color-text); outline-offset: 2px; }
 
   .titles { flex: 1; min-width: 0; }
@@ -539,7 +729,7 @@
     display: flex;
     padding: 4px;
     border-radius: 999px;
-    background: oklch(1 0 0 / 0.07);
+    background: oklch(var(--n1000) / 0.07);
   }
   .kind button {
     height: 34px;
@@ -552,7 +742,7 @@
     transition: background 200ms var(--ease-out), color 200ms var(--ease-out);
   }
   .kind button:hover { color: var(--color-text); }
-  .kind button.on { background: var(--color-text); color: oklch(0.14 0.004 25); }
+  .kind button.on { background: var(--color-text); color: oklch(var(--n140)); }
   .kind button:focus-visible { outline: 2px solid var(--color-text); outline-offset: 2px; }
 
   .search {
@@ -564,14 +754,14 @@
     height: 48px;
     padding: 0 12px 0 46px;
     border-radius: 8px;
-    background: oklch(0.12 0.004 25 / 0.7);
-    box-shadow: inset 0 0 0 1px oklch(1 0 0 / 0.14);
+    background: oklch(var(--n120) / 0.7);
+    box-shadow: inset 0 0 0 1px oklch(var(--n1000) / 0.14);
     transition: box-shadow 200ms var(--ease-out), background 200ms var(--ease-out);
     cursor: text;
   }
-  .search:hover { box-shadow: inset 0 0 0 1px oklch(1 0 0 / 0.28); }
+  .search:hover { box-shadow: inset 0 0 0 1px oklch(var(--n1000) / 0.28); }
   .search:focus-within {
-    background: oklch(0.1 0.004 25 / 0.9);
+    background: oklch(var(--n100) / 0.9);
     box-shadow: inset 0 0 0 2px var(--color-text);
   }
   .search-icon {
@@ -603,7 +793,7 @@
     flex-shrink: 0;
     padding: 2px 7px;
     border-radius: 4px;
-    background: oklch(1 0 0 / 0.08);
+    background: oklch(var(--n1000) / 0.08);
     color: var(--color-text-muted);
     font-family: inherit;
     font-size: 0.6875rem;
@@ -618,31 +808,123 @@
     display: grid;
     place-items: center;
     border-radius: 50%;
-    background: oklch(1 0 0 / 0.1);
+    background: oklch(var(--n1000) / 0.1);
     color: var(--color-text);
   }
   .clear :global(svg) { width: 14px; height: 14px; }
-  .clear:hover { background: oklch(1 0 0 / 0.2); }
+  .clear:hover { background: oklch(var(--n1000) / 0.2); }
 
   /* ── Category side panel ───────────────────────────────────────────── */
 
   .layout {
-    display: grid;
-    grid-template-columns: clamp(220px, 17vw, 280px) minmax(0, 1fr);
-    gap: clamp(16px, 2vw, 32px);
-    padding: 0 var(--gutter) 0 calc(var(--gutter) - 12px);
+    padding: 0 var(--gutter);
   }
 
-  .rail {
-    position: sticky;
-    align-self: start;
+  /* Header button that opens the categories sheet */
+  .cats-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    height: 40px;
+    padding: 0 12px 0 14px;
+    border-radius: 999px;
+    background: oklch(var(--n1000) / 0.08);
+    box-shadow: inset 0 0 0 1px oklch(var(--n1000) / 0.1);
+    color: var(--color-text);
+    font-size: 0.875rem;
+    font-weight: 700;
+    transition: background 150ms var(--ease-out);
+  }
+  .cats-btn :global(svg) { width: 17px; height: 17px; }
+  .cats-btn:hover { background: oklch(var(--n1000) / 0.14); }
+  .cats-btn:focus-visible { outline: 2px solid var(--color-text); outline-offset: 2px; }
+  .cats-count {
+    padding: 1px 7px;
+    border-radius: 999px;
+    background: oklch(var(--n1000) / 0.1);
+    color: var(--color-text-muted);
+    font-size: 0.75rem;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ── Categories sheet ───────────────────────────────────────────────── */
+
+  .scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+    /* Invisible click-catcher only: a dimming layer fading over the page made it shimmer */
+    background: transparent;
+    cursor: default;
+  }
+  .sheet {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 72px;
+    z-index: 61;
+    width: min(380px, calc(100vw - 72px));
     display: flex;
     flex-direction: column;
     gap: 2px;
-    padding: 14px 4px 32px 0;
+    padding: 0 12px 32px;
     overflow-y: auto;
+    overscroll-behavior: contain;
     scrollbar-width: thin;
+    background: oklch(var(--n150) / 0.97);
+    /* A hairline instead of a drop shadow: a big blurred shadow repaints every frame of the slide */
+    border-right: 1px solid oklch(var(--n1000) / 0.08);
+    /* Transform-only slide: composited, no layout work while it moves */
+    /* Stays painted off-canvas (inert while closed); the slide itself is driven
+       from script (see SHEET_MS) */
+    transform: translate3d(-104%, 0, 0);
+    will-change: transform;
   }
+  .sheet-head {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 20px 4px 12px 12px;
+    background: inherit;
+  }
+  .sheet-head h2 { font-size: 1.125rem; font-weight: 800; }
+  .sheet-x {
+    width: 34px;
+    height: 34px;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--color-text-muted);
+  }
+  .sheet-x :global(svg) { width: 16px; height: 16px; }
+  .sheet-x:hover { background: oklch(var(--n1000) / 0.08); color: var(--color-text); }
+  .sheet .cat-search { position: sticky; top: 66px; z-index: 1; margin-bottom: 8px; }
+
+  /* ── Grouped view ───────────────────────────────────────────────────── */
+
+  .rows {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding-top: 12px;
+  }
+  .lazy-row { min-height: 330px; }
+  .lazy-row:has(> :global(.row)) { min-height: 0; }
+  .row-skel {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    padding: 0 var(--gutter) 22px;
+    overflow: hidden;
+  }
+  .sk-row-title { width: 180px; height: 20px; border-radius: 4px; }
+  .sk-tiles { display: flex; gap: 8px; }
+  .sk-tile { flex: 0 0 clamp(132px, 10.5vw, 188px); aspect-ratio: 2 / 3; border-radius: 6px; }
+  .more-cats { display: flex; justify-content: center; padding: 18px var(--gutter) 0; }
 
   .cat-search {
     position: relative;
@@ -652,8 +934,8 @@
     margin: 0 4px 10px 12px;
     padding: 0 10px 0 34px;
     border-radius: 8px;
-    background: oklch(1 0 0 / 0.06);
-    box-shadow: inset 0 0 0 1px oklch(1 0 0 / 0.08);
+    background: oklch(var(--n1000) / 0.06);
+    box-shadow: inset 0 0 0 1px oklch(var(--n1000) / 0.08);
     cursor: text;
     transition: box-shadow 150ms var(--ease-out);
   }
@@ -691,15 +973,15 @@
     padding: 0 12px;
     border-radius: 8px;
     background: none;
-    color: oklch(0.8 0.004 25);
+    color: oklch(var(--n800));
     font-size: 0.875rem;
     font-weight: 500;
     text-align: start;
     transition: background 150ms var(--ease-out), color 150ms var(--ease-out);
   }
-  .cat:hover { background: oklch(1 0 0 / 0.05); color: var(--color-text); }
+  .cat:hover { background: oklch(var(--n1000) / 0.05); color: var(--color-text); }
   .cat:focus-visible { outline: 2px solid var(--color-text); outline-offset: -2px; }
-  .cat.on { background: oklch(1 0 0 / 0.1); color: var(--color-text); font-weight: 700; }
+  .cat.on { background: oklch(var(--n1000) / 0.1); color: var(--color-text); font-weight: 700; }
   .cat.new { font-weight: 700; color: var(--color-text); }
   .cat.new :global(svg) { width: 16px; height: 16px; flex-shrink: 0; color: var(--color-accent); }
   .cat-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -726,13 +1008,13 @@
     align-items: center;
     height: 36px;
     border-radius: 18px;
-    background: oklch(1 0 0 / 0.07);
-    box-shadow: inset 0 0 0 1px oklch(1 0 0 / 0.1);
+    background: oklch(var(--n1000) / 0.07);
+    box-shadow: inset 0 0 0 1px oklch(var(--n1000) / 0.1);
     transition: box-shadow 150ms var(--ease-out), background 150ms var(--ease-out);
   }
-  .select:hover { background: oklch(1 0 0 / 0.11); }
+  .select:hover { background: oklch(var(--n1000) / 0.11); }
   .select:focus-within { box-shadow: inset 0 0 0 2px var(--color-text); }
-  .select.active { background: oklch(1 0 0 / 0.16); box-shadow: inset 0 0 0 1px oklch(1 0 0 / 0.35); }
+  .select.active { background: oklch(var(--n1000) / 0.16); box-shadow: inset 0 0 0 1px oklch(var(--n1000) / 0.35); }
   .select span {
     padding-left: 14px;
     font-size: 0.75rem;
@@ -755,7 +1037,7 @@
     cursor: pointer;
   }
   .select select:focus { border: none; }
-  .select option { background: oklch(0.2 0.005 25); }
+  .select option { background: oklch(var(--n200)); }
 
   .toggle, .clear-filters {
     display: inline-flex;
@@ -769,13 +1051,13 @@
     transition: background 150ms var(--ease-out), color 150ms var(--ease-out);
   }
   .toggle {
-    background: oklch(1 0 0 / 0.07);
-    box-shadow: inset 0 0 0 1px oklch(1 0 0 / 0.1);
-    color: oklch(0.88 0.004 25);
+    background: oklch(var(--n1000) / 0.07);
+    box-shadow: inset 0 0 0 1px oklch(var(--n1000) / 0.1);
+    color: oklch(var(--n880));
   }
   .toggle :global(svg) { width: 14px; height: 14px; color: var(--color-accent-yellow); }
-  .toggle:hover { background: oklch(1 0 0 / 0.12); }
-  .toggle.on { background: var(--color-text); color: oklch(0.14 0.004 25); box-shadow: none; }
+  .toggle:hover { background: oklch(var(--n1000) / 0.12); }
+  .toggle.on { background: var(--color-text); color: oklch(var(--n140)); box-shadow: none; }
   .clear-filters { background: none; color: var(--color-text-muted); }
   .clear-filters:hover { color: var(--color-text); }
   .toggle:focus-visible, .clear-filters:focus-visible { outline: 2px solid var(--color-text); outline-offset: 2px; }
@@ -792,7 +1074,7 @@
     border-radius: 4px;
     /* No backdrop-filter: WebKitGTK repaints the whole page behind every one,
        and a grid full of them freezes the app */
-    background: oklch(0.12 0.004 25 / 0.88);
+    background: oklch(var(--n120) / 0.88);
     color: var(--color-text);
     font-size: 0.75rem;
     font-weight: 800;
@@ -829,12 +1111,15 @@
     border-radius: 6px;
     overflow: hidden;
     background: var(--color-card);
-    transition: transform 260ms var(--ease-out), box-shadow 260ms var(--ease-out);
+    /* Hover uses paint-only properties (top, box-shadow): WebKitGTK glitches a frame
+       when a GPU transform/opacity transition ends, flashing the card you just left */
+    top: 0;
+    transition: top 220ms var(--ease-out), box-shadow 220ms var(--ease-out);
   }
   .art img { width: 100%; height: 100%; object-fit: cover; display: block; }
   .tile:hover .art {
-    transform: translateY(-6px) scale(1.04);
-    box-shadow: 0 24px 48px -16px oklch(0 0 0 / 0.85), 0 0 0 1px oklch(1 0 0 / 0.12);
+    top: -6px;
+    box-shadow: 0 24px 48px -16px oklch(0 0 0 / 0.85), 0 0 0 1px oklch(var(--n1000) / 0.12);
   }
 
   .art-empty {
@@ -855,22 +1140,19 @@
     display: grid;
     place-items: center;
     background: linear-gradient(to top, oklch(0 0 0 / 0.55), transparent 55%);
-    opacity: 0;
-    transition: opacity 200ms var(--ease-out);
+    /* Shown instantly, no opacity fade (see .art) */
+    visibility: hidden;
   }
   .play :global(svg) {
     width: 46px;
     height: 46px;
     padding: 12px 11px 12px 13px;
     border-radius: 50%;
-    background: oklch(0.98 0.004 25 / 0.95);
-    color: oklch(0.14 0.004 25);
-    transform: scale(0.85);
-    transition: transform 260ms var(--ease-out);
+    background: oklch(var(--n980) / 0.95);
+    color: oklch(var(--n140));
   }
   .tile:hover .play,
-  .tile:focus-visible .play { opacity: 1; }
-  .tile:hover .play :global(svg) { transform: scale(1); }
+  .tile:focus-visible .play { visibility: visible; }
 
   .name {
     font-size: 0.875rem;
@@ -898,17 +1180,21 @@
     width: 28px;
     height: 28px;
     border-radius: 50%;
-    border: 3px solid oklch(1 0 0 / 0.12);
+    border: 3px solid oklch(var(--n1000) / 0.12);
     border-top-color: var(--color-accent);
     animation: spin 800ms linear infinite;
   }
   @keyframes spin { to { transform: rotate(360deg); } }
 
   .sk {
-    background: linear-gradient(90deg, oklch(1 0 0 / 0.05) 0%, oklch(1 0 0 / 0.1) 50%, oklch(1 0 0 / 0.05) 100%);
+    background: linear-gradient(90deg, oklch(var(--n1000) / 0.05) 0%, oklch(var(--n1000) / 0.1) 50%, oklch(var(--n1000) / 0.05) 100%);
     background-size: 200% 100%;
-    animation: shimmer 1.6s linear infinite;
+    /* Hidden for the first 160ms: fast loads go straight to content instead of
+       flashing a skeleton for a frame or two */
+    visibility: hidden;
+    animation: shimmer 1.6s linear infinite, sk-show 0s 160ms forwards;
   }
+  @keyframes sk-show { to { visibility: visible; } }
   .sk-line { height: 13px; width: 75%; border-radius: 4px; }
   @keyframes shimmer {
     from { background-position: 100% 0; }
@@ -931,12 +1217,12 @@
     padding: 0 20px;
     border-radius: 6px;
     background: var(--color-text);
-    color: oklch(0.14 0.004 25);
+    color: oklch(var(--n140));
     font-weight: 700;
   }
-  .btn:hover { background: oklch(0.85 0.004 25); }
-  .btn.ghost { background: oklch(1 0 0 / 0.1); color: var(--color-text); }
-  .btn.ghost:hover { background: oklch(1 0 0 / 0.18); }
+  .btn:hover { background: oklch(var(--n850)); }
+  .btn.ghost { background: oklch(var(--n1000) / 0.1); color: var(--color-text); }
+  .btn.ghost:hover { background: oklch(var(--n1000) / 0.18); }
 
   @media (max-width: 1000px) {
     .head-row { flex-wrap: wrap; }
@@ -944,7 +1230,7 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .sk, .spinner, .ambient { animation: none; }
-    .art, .play, .play :global(svg) { transition: none; }
+    .sk, .spinner { animation: none; visibility: visible; }
+    .art { transition: none; }
   }
 </style>

@@ -358,7 +358,8 @@ pub async fn mpv_play(
     let badge_arg = live_badge_script(&app).map(|path| format!("--script={}", path));
 
     // Launch MPV — ultimate IPTV settings for zero cuts
-    let mut cmd = Command::new("mpv");
+    let mut cmd = Command::new(crate::tools::program("mpv"));
+    crate::tools::NoConsole::no_console(&mut cmd);
     // Die with the app: otherwise a crash, kill or dev rebuild leaves MPV
     // decoding (and playing audio) with no window to show it in.
     #[cfg(target_os = "linux")]
@@ -487,6 +488,7 @@ pub async fn mpv_play(
         .args(&window_args)
         .spawn()
         .map_err(|e| format!("Failed to start MPV: {}", e))?;
+    crate::tools::tie_to_app(&child);
 
     *mpv.process.lock().unwrap() = Some(child);
     *mpv.wid.lock().unwrap() = wid;

@@ -25,7 +25,7 @@
 
 <script lang="ts">
   import { tick } from 'svelte';
-  import { fly } from 'svelte/transition';
+  import { jsFly } from '$lib/motion';
   import { goto } from '$app/navigation';
   import { favoriteLists, favoriteListSave, favoriteSetList } from '$lib/tauri';
   import type { FavoriteList } from '$lib/tauri';
@@ -132,7 +132,7 @@
     creating = true;
     held = true;
     await tick();
-    inputEl?.focus();
+    inputEl?.focus({ preventScroll: true });
   }
 
   async function create() {
@@ -180,7 +180,7 @@
     tabindex="-1"
     onpointerenter={() => (held = true)}
     onfocusin={() => (held = true)}
-    transition:fly={{ y: below ? -8 : 8, duration: 180 }}
+    transition:jsFly={{ y: below ? -8 : 8, duration: 180 }}
   >
     <div class="head">
       <span class="heart" aria-hidden="true">
@@ -238,8 +238,8 @@
     padding: 14px 14px 12px;
     border-radius: 14px;
     overflow: hidden;
-    background: oklch(0.21 0.006 25);
-    box-shadow: 0 28px 60px -16px oklch(0 0 0 / 0.9), 0 0 0 1px oklch(1 0 0 / 0.1);
+    background: oklch(var(--n210));
+    box-shadow: 0 28px 60px -16px oklch(0 0 0 / 0.9), 0 0 0 1px oklch(var(--n1000) / 0.1);
   }
   .saved:focus { outline: none; }
 
@@ -253,19 +253,13 @@
     border-radius: 50%;
     background: oklch(0.58 0.225 27 / 0.18);
     color: var(--color-accent);
-    animation: pop 420ms var(--ease-out);
   }
   .heart :global(svg) { width: 19px; height: 19px; }
-  @keyframes pop {
-    0% { transform: scale(0.4); }
-    60% { transform: scale(1.12); }
-    100% { transform: scale(1); }
-  }
   .titles { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
   .titles b { font-size: 0.9375rem; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .titles span { font-size: 0.75rem; color: var(--color-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: left; }
   .x { flex: none; width: 28px; height: 28px; display: grid; place-items: center; border-radius: 50%; background: none; color: var(--color-text-muted); }
-  .x:hover { background: oklch(1 0 0 / 0.1); color: var(--color-text); }
+  .x:hover { background: oklch(var(--n1000) / 0.1); color: var(--color-text); }
   .x :global(svg) { width: 13px; height: 13px; }
 
   .ask { font-size: 0.75rem; font-weight: 700; color: var(--color-text-muted); }
@@ -278,20 +272,19 @@
     max-width: 100%;
     padding: 0 12px;
     border-radius: 16px;
-    background: oklch(1 0 0 / 0.07);
-    color: oklch(0.9 0.004 25);
+    background: oklch(var(--n1000) / 0.07);
+    color: oklch(var(--n900));
     font-size: 0.8125rem;
     font-weight: 700;
-    transition: background 120ms var(--ease-out), color 120ms var(--ease-out), transform 120ms var(--ease-out);
+    transition: background 120ms var(--ease-out), color 120ms var(--ease-out);
   }
   .chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .chip i { flex: none; width: 8px; height: 8px; border-radius: 50%; }
-  .chip:hover { background: oklch(1 0 0 / 0.13); color: var(--color-text); }
-  .chip:active { transform: scale(0.96); }
-  .chip.on { background: var(--color-text); color: oklch(0.16 0.004 25); }
+  .chip:hover { background: oklch(var(--n1000) / 0.13); color: var(--color-text); }
+  .chip.on { background: var(--color-text); color: oklch(var(--n160)); }
   .chip :global(svg) { flex: none; width: 13px; height: 13px; }
-  .chip.add { background: none; box-shadow: inset 0 0 0 1px oklch(1 0 0 / 0.18); color: var(--color-text-muted); }
-  .chip.add:hover { color: var(--color-text); box-shadow: inset 0 0 0 1px oklch(1 0 0 / 0.35); }
+  .chip.add { background: none; box-shadow: inset 0 0 0 1px oklch(var(--n1000) / 0.18); color: var(--color-text-muted); }
+  .chip.add:hover { color: var(--color-text); box-shadow: inset 0 0 0 1px oklch(var(--n1000) / 0.35); }
   .chip:focus-visible, .done:focus-visible, .link:focus-visible { outline: 2px solid var(--color-text); outline-offset: 2px; }
 
   .new { flex: 1 1 100%; display: flex; gap: 6px; }
@@ -327,18 +320,14 @@
     height: 32px;
     padding: 0 16px;
     border-radius: 7px;
-    background: oklch(1 0 0 / 0.1);
+    background: oklch(var(--n1000) / 0.1);
     color: var(--color-text);
     font-size: 0.8125rem;
     font-weight: 800;
   }
-  .done:hover { background: oklch(1 0 0 / 0.18); }
+  .done:hover { background: oklch(var(--n1000) / 0.18); }
 
   /* Time left before it closes by itself */
-  .timer { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: oklch(1 0 0 / 0.06); }
+  .timer { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: oklch(var(--n1000) / 0.06); }
   .timer i { display: block; height: 100%; background: var(--color-accent); transform-origin: left; }
-
-  @media (prefers-reduced-motion: reduce) {
-    .heart { animation: none; }
-  }
 </style>

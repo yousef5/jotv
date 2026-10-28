@@ -81,6 +81,6 @@
     color: var(--color-text-muted);
   }
   .tabs button:hover { color: var(--color-text); }
-  .tabs button.on { background: oklch(1 0 0 / 0.1); color: var(--color-text); }
+  .tabs button.on { background: oklch(var(--n1000) / 0.1); color: var(--color-text); }
   .tabs button:focus-visible { outline: 2px solid var(--color-text); outline-offset: -2px; }
 </style>

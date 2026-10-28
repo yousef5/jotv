@@ -692,6 +692,7 @@
     line-height: 1.3;
     display: -webkit-box;
     -webkit-line-clamp: 2;
+    line-clamp: 2;
     -webkit-box-orient: vertical;
     overflow: hidden;
   }
@@ -755,7 +756,7 @@
   }
 
   .dropdown-trigger:hover {
-    border-color: rgba(255, 255, 255, 0.15);
+    border-color: oklch(var(--n1000) / 0.15);
   }
 
   .dropdown-value {
@@ -770,7 +771,6 @@
     height: 14px;
     flex-shrink: 0;
     color: var(--color-text-muted);
-    transition: transform 0.2s;
   }
 
   .dropdown-arrow.open {
@@ -893,11 +893,9 @@
     font-size: 14px;
     font-weight: 700;
     flex-shrink: 0;
-    transition: all 0.15s;
   }
 
   .download-btn:hover {
-    transform: scale(1.03);
     filter: brightness(1.1);
   }
 
@@ -953,7 +951,8 @@
     border-radius: 4px;
     background: var(--color-surface);
     color: var(--color-text-muted);
-    transition: all 0.15s;
+    /* Paint-only: WebKitGTK blinks a frame when a GPU opacity/transform transition ends */
+    transition: background 0.15s, color 0.15s;
   }
 
   .clear-history-btn:hover {
@@ -1032,7 +1031,7 @@
 
   .ring-bg {
     fill: none;
-    stroke: rgba(255, 255, 255, 0.1);
+    stroke: oklch(var(--n1000) / 0.1);
     stroke-width: 2.5;
   }
 
@@ -1160,7 +1159,7 @@
     border-radius: 8px;
     background: var(--color-surface);
     color: var(--color-text-muted);
-    transition: all 0.15s;
+    transition: background 0.15s, color 0.15s;
   }
 
   .sdl-btn:hover {

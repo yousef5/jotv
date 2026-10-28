@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { fade } from 'svelte/transition';
+  import { jsFade } from '$lib/motion';
   import AddPlaylistModal from '$lib/components/AddPlaylistModal.svelte';
   import {
     deletePlaylist, exportPlaylist, getContentTypeCounts,
@@ -247,7 +247,7 @@
   {/if}
 
   {#if notice}
-    <div class="toast" role="status" transition:fade={{ duration: 160 }}>
+    <div class="toast" role="status" transition:jsFade={{ duration: 160 }}>
       <span>{notice.text}</span>
       {#if notice.path}
         <button onclick={() => showInFolder(notice!.path!)}>Show in folder</button>
@@ -315,11 +315,11 @@
     gap: 28px;
     padding: 24px 26px;
     border-radius: 12px;
-    background: oklch(0.2 0.005 25 / 0.85);
-    box-shadow: inset 0 0 0 1px oklch(1 0 0 / 0.06);
+    background: oklch(var(--n200) / 0.85);
+    box-shadow: inset 0 0 0 1px oklch(var(--n1000) / 0.06);
     overflow: hidden;
-    transition: opacity 200ms var(--ease-out);
   }
+  /* Dims instantly: a CSS opacity transition blinks a frame in WebKitGTK when it ends */
   .item.dim { opacity: 0.55; }
 
   .identity { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
@@ -336,7 +336,7 @@
     flex-shrink: 0;
     padding: 3px 8px;
     border-radius: 4px;
-    background: oklch(1 0 0 / 0.08);
+    background: oklch(var(--n1000) / 0.08);
     color: var(--color-text-muted);
     font-size: 0.6875rem;
     font-weight: 700;
@@ -358,7 +358,7 @@
     align-items: center;
     gap: 6px 16px;
     font-size: 0.8125rem;
-    color: oklch(0.82 0.004 25);
+    color: oklch(var(--n820));
   }
   .state { display: inline-flex; align-items: center; gap: 6px; font-weight: 700; }
   .state i { width: 7px; height: 7px; border-radius: 50%; background: var(--color-text-muted); }
@@ -373,19 +373,22 @@
     gap: 8px;
   }
   .section {
+    /* Paint-only lift (top, not transform): see .item.dim */
+    position: relative;
+    top: 0;
     display: flex;
     flex-direction: column;
     gap: 2px;
     padding: 14px 16px;
     border-radius: 8px;
-    background: oklch(1 0 0 / 0.04);
+    background: oklch(var(--n1000) / 0.04);
     color: var(--color-text);
     text-decoration: none;
-    transition: background 150ms var(--ease-out), transform 150ms var(--ease-out);
+    transition: background 150ms var(--ease-out), top 150ms var(--ease-out);
   }
   .section b { font-size: 1.5rem; font-weight: 800; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
   .section span { font-size: 0.8125rem; color: var(--color-text-muted); }
-  .section:hover { background: oklch(1 0 0 / 0.09); transform: translateY(-2px); }
+  .section:hover { background: oklch(var(--n1000) / 0.09); top: -2px; }
   .section:focus-visible { outline: 2px solid var(--color-text); outline-offset: 2px; }
 
   .actions { display: flex; flex-direction: column; gap: 6px; min-width: 170px; }
@@ -396,7 +399,7 @@
     height: 38px;
     padding: 0 14px;
     border-radius: 6px;
-    background: oklch(1 0 0 / 0.06);
+    background: oklch(var(--n1000) / 0.06);
     color: var(--color-text);
     font-size: 0.8125rem;
     font-weight: 600;
@@ -405,7 +408,7 @@
     transition: background 150ms var(--ease-out), color 150ms var(--ease-out);
   }
   .act :global(svg) { width: 16px; height: 16px; flex-shrink: 0; }
-  .act:hover:not(:disabled) { background: oklch(1 0 0 / 0.12); }
+  .act:hover:not(:disabled) { background: oklch(var(--n1000) / 0.12); }
   .act:focus-visible { outline: 2px solid var(--color-text); outline-offset: 2px; }
   .act.danger:hover:not(:disabled) { color: var(--color-accent-soft); }
   .act.confirm { background: var(--color-accent); color: var(--color-on-accent); justify-content: center; }
@@ -419,7 +422,7 @@
     right: 0;
     bottom: 0;
     height: 3px;
-    background: oklch(1 0 0 / 0.06);
+    background: oklch(var(--n1000) / 0.06);
   }
   .progress span { display: block; height: 100%; background: var(--color-accent); transition: width 300ms var(--ease-out); }
   .stage {
@@ -455,7 +458,7 @@
     padding: 12px 14px 12px 18px;
     border-radius: 8px;
     background: var(--color-text);
-    color: oklch(0.14 0.004 25);
+    color: oklch(var(--n140));
     font-size: 0.875rem;
     font-weight: 600;
     box-shadow: 0 20px 40px -12px oklch(0 0 0 / 0.7);
@@ -466,7 +469,7 @@
     height: 30px;
     padding: 0 12px;
     border-radius: 5px;
-    background: oklch(0.14 0.004 25);
+    background: oklch(var(--n140));
     color: var(--color-text);
     font-size: 0.8125rem;
     font-weight: 700;

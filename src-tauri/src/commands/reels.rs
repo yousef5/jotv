@@ -8,6 +8,7 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use crate::tools::{program, NoConsole};
 use std::sync::OnceLock;
 use tauri::{AppHandle, Manager, State};
 
@@ -350,7 +351,8 @@ pub async fn reel_set_cover(app: AppHandle, id: String, image: Option<String>) -
         let new_thumb = match image {
             Some(src) => {
                 let target = thumbs.join(format!("{}-cover-{}.jpg", id.replace(['/', '\\', '.'], "_"), now_millis()));
-                let ok = Command::new("ffmpeg")
+                let ok = Command::new(program("ffmpeg"))
+                    .no_console()
                     .args(["-y", "-v", "error", "-i", &src, "-frames:v", "1", "-vf", "scale='min(720,iw)':-2", "-q:v", "3"])
                     .arg(&target)
                     .status()
@@ -394,7 +396,8 @@ pub(crate) fn probe_and_store(app: &AppHandle, id: &str) -> Result<Reel, String>
     };
     let thumb_target = thumbs_dir(app)?.join(format!("{}.jpg", id.replace(['/', '\\', '.'], "_")));
 
-    let meta = Command::new("ffprobe")
+    let meta = Command::new(program("ffprobe"))
+        .no_console()
         .args(["-v", "error", "-print_format", "json", "-show_format", "-show_streams", "-select_streams", "v:0", &file])
         .output()
         .ok()
@@ -410,7 +413,8 @@ pub(crate) fn probe_and_store(app: &AppHandle, id: &str) -> Result<Reel, String>
     // A frame a little way in (first frames are often black)
     // (photos: just a smaller copy)
     let at = duration.map(|d| (d * 0.15).clamp(0.0, 8.0)).unwrap_or(if image { 0.0 } else { 1.0 });
-    let ok = Command::new("ffmpeg")
+    let ok = Command::new(program("ffmpeg"))
+        .no_console()
         .args(["-y", "-v", "error", "-ss", &format!("{:.2}", at), "-i", &file, "-frames:v", "1", "-vf", "scale='min(480,iw)':-2", "-q:v", "4"])
         .arg(&thumb_target)
         .status()

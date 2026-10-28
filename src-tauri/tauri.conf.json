@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "JoTV",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "identifier": "com.jotv.app",
   "build": {
     "frontendDist": "../build",
@@ -35,6 +35,9 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "category": "Video",
+    "shortDescription": "IPTV player for live TV, movies and series",
+    "longDescription": "JoTV plays your IPTV subscription (Xtream codes or M3U): live TV with an in-app player, a movie and series library with artwork, favorites, downloads and a video library.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

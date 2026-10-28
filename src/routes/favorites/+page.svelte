@@ -1,7 +1,6 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
-  import { fade, fly } from 'svelte/transition';
-  import { flip } from 'svelte/animate';
+  import { jsFade, jsFly, jsFlip } from '$lib/motion';
   import { goto } from '$app/navigation';
   import {
     removeFavorite, addFavorite, getSetting, favoriteLists, favoriteListSave, favoriteListDelete, favoriteSetList,
@@ -141,7 +140,7 @@
     confirmDelete = null;
     draft = { id, name };
     await tick();
-    draftEl?.focus();
+    draftEl?.focus({ preventScroll: true });
     draftEl?.select();
   }
 
@@ -324,7 +323,7 @@
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
   </button>
   {#if menuFor === f.channel_id}
-    <div class="menu" role="menu" aria-label="Category" transition:fly={{ y: -6, duration: 140 }}>
+    <div class="menu" role="menu" aria-label="Category" transition:jsFly={{ y: -6, duration: 140 }}>
       <p class="menu-head">{KIND_LABEL[f.content_type]} category</p>
       {#each own as l (l.id)}
         <button role="menuitemradio" aria-checked={cur?.id === l.id} onclick={() => setList(f, l.id)}>
@@ -452,7 +451,7 @@
     </div>
   {:else if !counts.all}
     <!-- First-time empty state -->
-    <section class="empty" in:fade={{ duration: 200 }}>
+    <section class="empty" in:jsFade={{ duration: 200 }}>
       <div class="empty-art" aria-hidden="true">
         <span class="card c1"></span><span class="card c2"></span><span class="card c3"></span>
       </div>
@@ -496,7 +495,7 @@
           {/if}
           <div class="grid" class:tiles={sec.kind === 'live'} class:posters={sec.kind !== 'live'}>
             {#each g.items as f (f.channel_id)}
-              <div class="item" class:menu-open={menuFor === f.channel_id} animate:flip={{ duration: 220 }} out:fade={{ duration: 150 }}>
+              <div class="item" class:menu-open={menuFor === f.channel_id} animate:jsFlip={{ duration: 220 }} out:jsFade={{ duration: 150 }}>
                 {#if sec.kind === 'live'}
                   {@render tile(f)}
                 {:else}
@@ -512,11 +511,11 @@
   {/if}
 
   {#if note}
-    <div class="toast" role="status" transition:fly={{ y: 16, duration: 180 }}><span>{note}</span></div>
+    <div class="toast" role="status" transition:jsFly={{ y: 16, duration: 180 }}><span>{note}</span></div>
   {/if}
 
   {#if undo}
-    <div class="toast" role="status" transition:fly={{ y: 16, duration: 180 }}>
+    <div class="toast" role="status" transition:jsFly={{ y: 16, duration: 180 }}>
       <span>Removed <b dir="auto">{splitTitle(undo.channel_name).title}</b></span>
       <button onclick={restore}>Undo</button>
     </div>
@@ -550,15 +549,15 @@
     height: 44px;
     padding: 0 10px 0 40px;
     border-radius: 8px;
-    background: oklch(1 0 0 / 0.06);
-    box-shadow: inset 0 0 0 1px oklch(1 0 0 / 0.1);
+    background: oklch(var(--n1000) / 0.06);
+    box-shadow: inset 0 0 0 1px oklch(var(--n1000) / 0.1);
     cursor: text;
   }
   .search:focus-within { box-shadow: inset 0 0 0 2px var(--color-text); }
   .search > :global(svg) { position: absolute; left: 13px; width: 18px; height: 18px; color: var(--color-text-muted); }
   .search input { flex: 1; min-width: 0; height: 100%; padding: 0; border: none; background: none; font-size: 0.9375rem; }
   .search input:focus { border: none; }
-  .clear { width: 26px; height: 26px; display: grid; place-items: center; border-radius: 50%; background: oklch(1 0 0 / 0.1); color: var(--color-text); }
+  .clear { width: 26px; height: 26px; display: grid; place-items: center; border-radius: 50%; background: oklch(var(--n1000) / 0.1); color: var(--color-text); }
   .clear :global(svg) { width: 12px; height: 12px; }
 
   .toolbar {
@@ -577,19 +576,19 @@
     height: 38px;
     padding: 0 16px;
     border-radius: 19px;
-    background: oklch(1 0 0 / 0.06);
-    color: oklch(0.85 0.004 25);
+    background: oklch(var(--n1000) / 0.06);
+    color: oklch(var(--n850));
     font-size: 0.875rem;
     font-weight: 700;
     transition: background 150ms var(--ease-out), color 150ms var(--ease-out);
   }
   .tabs button span { font-size: 0.75rem; opacity: 0.6; font-variant-numeric: tabular-nums; }
-  .tabs button:hover:not(:disabled) { background: oklch(1 0 0 / 0.12); }
-  .tabs button.on { background: var(--color-text); color: oklch(0.14 0.004 25); }
+  .tabs button:hover:not(:disabled) { background: oklch(var(--n1000) / 0.12); }
+  .tabs button.on { background: var(--color-text); color: oklch(var(--n140)); }
   .tabs button:disabled { opacity: 0.35; }
   .tabs button:focus-visible { outline: 2px solid var(--color-text); outline-offset: 2px; }
 
-  .right { display: flex; gap: 8px; --dd-bg: oklch(1 0 0 / 0.06); --dd-border: oklch(1 0 0 / 0.1); --dd-h: 38px; }
+  .right { display: flex; gap: 8px; --dd-bg: oklch(var(--n1000) / 0.06); --dd-border: oklch(var(--n1000) / 0.1); --dd-h: 38px; }
 
   /* Your categories */
   .cats { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: -12px 0 28px; }
@@ -601,17 +600,17 @@
     padding: 0 14px;
     border-radius: 17px;
     background: none;
-    box-shadow: inset 0 0 0 1px oklch(1 0 0 / 0.14);
-    color: oklch(0.85 0.004 25);
+    box-shadow: inset 0 0 0 1px oklch(var(--n1000) / 0.14);
+    color: oklch(var(--n850));
     font-size: 0.8125rem;
     font-weight: 700;
     transition: background 120ms var(--ease-out), color 120ms var(--ease-out);
   }
   .chip b { font-weight: 700; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .chip span { font-size: 0.75rem; opacity: 0.6; font-variant-numeric: tabular-nums; }
-  .chip:hover { background: oklch(1 0 0 / 0.07); color: var(--color-text); }
-  .chip.on { background: oklch(1 0 0 / 0.14); box-shadow: inset 0 0 0 1px oklch(1 0 0 / 0.3); color: var(--color-text); }
-  .chip.add { box-shadow: inset 0 0 0 1px oklch(1 0 0 / 0.14); color: var(--color-text-muted); border: 1px dashed transparent; }
+  .chip:hover { background: oklch(var(--n1000) / 0.07); color: var(--color-text); }
+  .chip.on { background: oklch(var(--n1000) / 0.14); box-shadow: inset 0 0 0 1px oklch(var(--n1000) / 0.3); color: var(--color-text); }
+  .chip.add { box-shadow: inset 0 0 0 1px oklch(var(--n1000) / 0.14); color: var(--color-text-muted); border: 1px dashed transparent; }
   .chip.add :global(svg) { width: 13px; height: 13px; }
   .chip-wrap { position: relative; display: inline-flex; }
   .chip-tools {
@@ -623,7 +622,7 @@
     gap: 2px;
     padding-left: 10px;
     border-radius: 0 15px 15px 0;
-    background: linear-gradient(to right, transparent, oklch(0.25 0.005 25) 10px);
+    background: linear-gradient(to right, transparent, oklch(var(--n250)) 10px);
   }
   .chip-wrap:hover .chip-tools, .chip-wrap:focus-within .chip-tools { display: flex; }
   .chip-wrap:hover .chip span { visibility: hidden; }
@@ -635,7 +634,7 @@
     background: none;
     color: var(--color-text-muted);
   }
-  .chip-tools button:hover { background: oklch(1 0 0 / 0.12); color: var(--color-text); }
+  .chip-tools button:hover { background: oklch(var(--n1000) / 0.12); color: var(--color-text); }
   .chip-tools :global(svg) { width: 13px; height: 13px; }
   .chip-tools .danger { width: auto; padding: 0 10px; color: var(--color-accent-soft); font-size: 0.75rem; font-weight: 800; }
   .chip-input {
@@ -684,18 +683,19 @@
     display: grid;
     place-items: center;
     border-radius: 50%;
-    background: oklch(0.12 0.004 25 / 0.85);
+    background: oklch(var(--n120) / 0.85);
     color: var(--color-text);
-    box-shadow: 0 0 0 1px oklch(1 0 0 / 0.2);
+    box-shadow: 0 0 0 1px oklch(var(--n1000) / 0.2);
+    /* Instant show/hide (no opacity/transform transition: WebKitGTK blinks a frame when
+       one ends). Opacity, not visibility, so it stays reachable with Tab */
     opacity: 0;
-    transform: scale(0.85);
-    transition: opacity 150ms var(--ease-out), transform 150ms var(--ease-out), background 150ms var(--ease-out);
+    transition: background 150ms var(--ease-out);
   }
   .sort-btn :global(svg) { width: 14px; height: 14px; }
-  .sort-btn:hover { background: oklch(0.3 0.006 25); }
-  .item:hover .sort-btn, .sort-btn:focus-visible, .item.menu-open .sort-btn { opacity: 1; transform: none; }
+  .sort-btn:hover { background: oklch(var(--n300)); }
+  .item:hover .sort-btn, .sort-btn:focus-visible, .item.menu-open .sort-btn { opacity: 1; }
   .item.menu-open { z-index: 10; }
-  .item.menu-open .remove { opacity: 1; transform: none; }
+  .item.menu-open .remove { opacity: 1; }
   .menu {
     position: absolute;
     top: 44px;
@@ -706,8 +706,8 @@
     flex-direction: column;
     padding: 6px;
     border-radius: 10px;
-    background: oklch(0.22 0.005 25);
-    box-shadow: 0 22px 48px -12px oklch(0 0 0 / 0.85), 0 0 0 1px oklch(1 0 0 / 0.1);
+    background: oklch(var(--n220));
+    box-shadow: 0 22px 48px -12px oklch(0 0 0 / 0.85), 0 0 0 1px oklch(var(--n1000) / 0.1);
   }
   .menu-head { padding: 6px 8px 6px; font-size: 0.6875rem; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; color: var(--color-text-muted); }
   .menu > button {
@@ -718,16 +718,16 @@
     padding: 0 9px;
     border-radius: 6px;
     background: none;
-    color: oklch(0.9 0.004 25);
+    color: oklch(var(--n900));
     font-size: 0.8125rem;
     font-weight: 600;
     text-align: left;
   }
   .menu > button span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .menu > button:hover { background: oklch(1 0 0 / 0.08); color: var(--color-text); }
+  .menu > button:hover { background: oklch(var(--n1000) / 0.08); color: var(--color-text); }
   .menu > button.muted { color: var(--color-text-muted); }
   .tick { width: 15px; height: 15px; color: var(--color-accent-soft); }
-  .menu-new { display: flex; gap: 4px; margin-top: 4px; padding-top: 6px; border-top: 1px solid oklch(1 0 0 / 0.08); }
+  .menu-new { display: flex; gap: 4px; margin-top: 4px; padding-top: 6px; border-top: 1px solid oklch(var(--n1000) / 0.08); }
   .menu-new input {
     flex: 1;
     min-width: 0;
@@ -741,7 +741,7 @@
     text-align: left;
   }
   .menu-new input:focus { box-shadow: inset 0 0 0 2px var(--color-text-muted); }
-  .menu-new button { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 6px; background: var(--color-text); color: oklch(0.14 0.004 25); }
+  .menu-new button { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 6px; background: var(--color-text); color: oklch(var(--n140)); }
   .menu-new button:disabled { opacity: 0.35; }
   .menu-new :global(svg) { width: 14px; height: 14px; }
 
@@ -771,10 +771,12 @@
     place-items: center;
     border-radius: 8px;
     overflow: hidden;
-    background: oklch(0.22 0.005 25);
-    transition: transform 240ms var(--ease-out), box-shadow 240ms var(--ease-out);
+    background: oklch(var(--n220));
+    /* Paint-only lift (top, not transform): see .remove */
+    top: 0;
+    transition: top 240ms var(--ease-out), box-shadow 240ms var(--ease-out);
   }
-  .tile-art { aspect-ratio: 16 / 9; box-shadow: inset 0 0 0 1px oklch(1 0 0 / 0.06); }
+  .tile-art { aspect-ratio: 16 / 9; box-shadow: inset 0 0 0 1px oklch(var(--n1000) / 0.06); }
   .tile-art img { width: 100%; height: 100%; object-fit: contain; padding: 16% 22%; }
   .tile.playing .tile-art { box-shadow: inset 0 0 0 2px var(--color-accent); }
   .letter { font-size: 2rem; font-weight: 900; color: var(--color-text-muted); }
@@ -791,8 +793,8 @@
   }
 
   .tile:hover .tile-art, .poster:hover .art {
-    transform: translateY(-4px);
-    box-shadow: 0 20px 40px -16px oklch(0 0 0 / 0.85), 0 0 0 1px oklch(1 0 0 / 0.12);
+    top: -4px;
+    box-shadow: 0 20px 40px -16px oklch(0 0 0 / 0.85), 0 0 0 1px oklch(var(--n1000) / 0.12);
   }
 
   .badge {
@@ -804,7 +806,7 @@
     gap: 5px;
     padding: 2px 7px;
     border-radius: 3px;
-    background: oklch(0.12 0.004 25 / 0.8);
+    background: oklch(var(--n120) / 0.8);
     font-size: 0.625rem;
     font-weight: 800;
     letter-spacing: 0.06em;
@@ -820,12 +822,12 @@
     bottom: 12px;
     padding: 4px 8px;
     border-radius: 4px;
-    background: oklch(0.12 0.004 25 / 0.85);
+    background: oklch(var(--n120) / 0.85);
     font-size: 0.6875rem;
     font-weight: 800;
     text-align: center;
   }
-  .bar { position: absolute; left: 0; right: 0; bottom: 0; height: 4px; background: oklch(1 0 0 / 0.25); }
+  .bar { position: absolute; left: 0; right: 0; bottom: 0; height: 4px; background: oklch(var(--n1000) / 0.25); }
   .bar span { display: block; height: 100%; background: var(--color-accent); }
 
   .play {
@@ -834,18 +836,17 @@
     display: grid;
     place-items: center;
     background: oklch(0 0 0 / 0.35);
-    opacity: 0;
-    transition: opacity 180ms var(--ease-out);
+    visibility: hidden;
   }
   .play :global(svg) {
     width: 46px;
     height: 46px;
     padding: 12px 11px 12px 13px;
     border-radius: 50%;
-    background: oklch(0.98 0.004 25 / 0.95);
-    color: oklch(0.14 0.004 25);
+    background: oklch(var(--n980) / 0.95);
+    color: oklch(var(--n140));
   }
-  .tile:hover .play, .poster:hover .play, .tile:focus-visible .play, .poster:focus-visible .play { opacity: 1; }
+  .tile:hover .play, .poster:hover .play, .tile:focus-visible .play, .poster:focus-visible .play { visibility: visible; }
 
   .name { font-size: 0.875rem; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .sub { margin-top: -5px; font-size: 0.75rem; color: var(--color-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -860,15 +861,14 @@
     display: grid;
     place-items: center;
     border-radius: 50%;
-    background: oklch(0.12 0.004 25 / 0.85);
+    background: oklch(var(--n120) / 0.85);
     color: var(--color-text);
-    box-shadow: 0 0 0 1px oklch(1 0 0 / 0.2);
+    box-shadow: 0 0 0 1px oklch(var(--n1000) / 0.2);
     opacity: 0;
-    transform: scale(0.85);
-    transition: opacity 150ms var(--ease-out), transform 150ms var(--ease-out), background 150ms var(--ease-out);
+    transition: background 150ms var(--ease-out);
   }
   .remove :global(svg) { width: 13px; height: 13px; }
-  .item:hover .remove, .remove:focus-visible { opacity: 1; transform: none; }
+  .item:hover .remove, .remove:focus-visible { opacity: 1; }
   .remove:hover { background: var(--color-accent); }
   .remove:focus-visible { outline: 2px solid var(--color-text); outline-offset: 2px; }
 
@@ -882,8 +882,9 @@
     max-width: 560px;
     margin: 6vh auto 0;
   }
-  .empty-art { position: relative; width: 220px; height: 150px; margin-bottom: 10px; }
-  .card { position: absolute; width: 92px; height: 132px; border-radius: 10px; background: oklch(0.24 0.005 25); box-shadow: 0 20px 40px -16px oklch(0 0 0 / 0.8), inset 0 0 0 1px oklch(1 0 0 / 0.06); }
+  /* Decorative; also keeps the global .card hover lift off these */
+  .empty-art { position: relative; width: 220px; height: 150px; margin-bottom: 10px; pointer-events: none; }
+  .card { position: absolute; width: 92px; height: 132px; border-radius: 10px; background: oklch(var(--n240)); box-shadow: 0 20px 40px -16px oklch(0 0 0 / 0.8), inset 0 0 0 1px oklch(var(--n1000) / 0.06); }
   .c1 { left: 10px; top: 14px; transform: rotate(-10deg); opacity: 0.6; }
   .c3 { right: 10px; top: 14px; transform: rotate(10deg); opacity: 0.6; }
   .c2 { left: 64px; top: 0; z-index: 1; }
@@ -908,23 +909,23 @@
   }
   .empty h2 { font-size: 2rem; font-weight: 900; letter-spacing: -0.03em; }
   .empty p { color: var(--color-text-muted); line-height: 1.6; }
-  .how { list-style: none; display: flex; flex-direction: column; gap: 8px; font-size: 0.9375rem; color: oklch(0.85 0.004 25); }
+  .how { list-style: none; display: flex; flex-direction: column; gap: 8px; font-size: 0.9375rem; color: oklch(var(--n850)); }
   .how b { color: var(--color-text); }
-  .k { display: inline-grid; place-items: center; min-width: 24px; height: 24px; padding: 0 6px; border-radius: 6px; background: oklch(1 0 0 / 0.1); font-weight: 800; }
+  .k { display: inline-grid; place-items: center; min-width: 24px; height: 24px; padding: 0 6px; border-radius: 6px; background: oklch(var(--n1000) / 0.1); font-weight: 800; }
   .cta { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin-top: 10px; }
   .cta button, .none button {
     height: 44px;
     padding: 0 20px;
     border-radius: 6px;
-    background: oklch(1 0 0 / 0.1);
+    background: oklch(var(--n1000) / 0.1);
     color: var(--color-text);
     font-size: 0.9375rem;
     font-weight: 700;
     transition: background 150ms var(--ease-out);
   }
-  .cta button:hover, .none button:hover { background: oklch(1 0 0 / 0.18); }
-  .cta .primary { background: var(--color-text); color: oklch(0.14 0.004 25); }
-  .cta .primary:hover { background: oklch(0.85 0.004 25); }
+  .cta button:hover, .none button:hover { background: oklch(var(--n1000) / 0.18); }
+  .cta .primary { background: var(--color-text); color: oklch(var(--n140)); }
+  .cta .primary:hover { background: oklch(var(--n850)); }
 
   .none { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 60px 0; text-align: center; }
   .none strong { font-size: 1.125rem; }
@@ -942,7 +943,7 @@
     padding: 10px 10px 10px 18px;
     border-radius: 8px;
     background: var(--color-text);
-    color: oklch(0.14 0.004 25);
+    color: oklch(var(--n140));
     font-size: 0.875rem;
     box-shadow: 0 20px 40px -12px oklch(0 0 0 / 0.7);
   }
@@ -950,22 +951,27 @@
     height: 32px;
     padding: 0 14px;
     border-radius: 5px;
-    background: oklch(0.14 0.004 25);
+    background: oklch(var(--n140));
     color: var(--color-text);
     font-weight: 800;
   }
 
   .sk {
     border-radius: 8px;
-    background: linear-gradient(90deg, oklch(1 0 0 / 0.05) 0%, oklch(1 0 0 / 0.1) 50%, oklch(1 0 0 / 0.05) 100%);
+    background: linear-gradient(90deg, oklch(var(--n1000) / 0.05) 0%, oklch(var(--n1000) / 0.1) 50%, oklch(var(--n1000) / 0.05) 100%);
     background-size: 200% 100%;
-    animation: shimmer 1.6s linear infinite;
+    /* Hidden for the first 160ms: fast loads go straight to content instead of
+       flashing a skeleton for a frame or two */
+    visibility: hidden;
+    animation: shimmer 1.6s linear infinite, sk-show 0s 160ms forwards;
   }
+  @keyframes sk-show { to { visibility: visible; } }
   .poster-sk { aspect-ratio: 2 / 3; }
   @keyframes shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
 
   @media (prefers-reduced-motion: reduce) {
-    .sk { animation: none; }
-    .tile-art, .art, .remove, .play { transition: none; }
+    .sk { animation: none; visibility: visible; }
+    .tile-art, .art, .remove { transition: none; }
+    .tile:hover .tile-art, .poster:hover .art { top: 0; }
   }
 </style>

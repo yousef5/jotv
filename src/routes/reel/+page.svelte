@@ -6,7 +6,7 @@
 
 <script lang="ts">
   import { onMount, tick } from 'svelte';
-  import { fade } from 'svelte/transition';
+  import { jsFade } from '$lib/motion';
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
   import { mpvPause, reelPlayed, reelUpdate, reelsDelete } from '$lib/tauri';
@@ -222,7 +222,7 @@
 
 <div class="reel-page">
   {#if bg}
-    {#key bg}<img class="ambient" src={bg} alt="" aria-hidden="true" in:fade={{ duration: 500 }} />{/key}
+    {#key bg}<img class="ambient" src={bg} alt="" aria-hidden="true" in:jsFade={{ duration: 500 }} />{/key}
   {/if}
 
   <header class="top">
@@ -251,7 +251,7 @@
           {#if !reel && $reelsLoaded}
             <div class="msg"><strong>Video not found</strong><span>It may have been removed from the library.</span><button class="btn" onclick={back}>Go back</button></div>
           {:else if isImage && reel}
-            {#key reel.id}<img class="photo" src={fileSrc(reel)} alt={reel.title} in:fade={{ duration: 220 }} />{/key}
+            {#key reel.id}<img class="photo" src={fileSrc(reel)} alt={reel.title} in:jsFade={{ duration: 220 }} />{/key}
           {:else if starting || !$nowPlaying?.embedded}
             <div class="msg">
               {#if mine && !$nowPlaying?.embedded}
@@ -306,7 +306,7 @@
             </button>
           </div>
           {#if askDelete}
-            <div class="ask" transition:fade={{ duration: 120 }} role="alertdialog" aria-label="Delete this video?">
+            <div class="ask" transition:jsFade={{ duration: 120 }} role="alertdialog" aria-label="Delete this video?">
               <b>Delete this video?</b>
               <button class="abtn danger" onclick={() => deleteCurrent(true)}>Delete file from disk</button>
               <button class="abtn" onclick={() => deleteCurrent(false)}>Only remove from library</button>
@@ -417,7 +417,7 @@
     height: 100vh;
     display: grid;
     grid-template-rows: auto minmax(0, 1fr) auto;
-    background: oklch(0.09 0.003 25);
+    background: oklch(var(--n90));
     color: var(--color-text);
     overflow: hidden;
     isolation: isolate;
@@ -435,7 +435,7 @@
   }
 
   .top { display: flex; align-items: center; gap: 14px; padding: 10px 18px; }
-  .crumb { display: flex; align-items: center; gap: 8px; font-size: 0.875rem; font-weight: 700; color: oklch(0.85 0.004 25); }
+  .crumb { display: flex; align-items: center; gap: 8px; font-size: 0.875rem; font-weight: 700; color: oklch(var(--n850)); }
   .dot { width: 9px; height: 9px; border-radius: 50%; }
   .counter { font-size: 0.8125rem; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--color-text-muted); }
   .grow { flex: 1; min-width: 0; }
@@ -482,7 +482,7 @@
   }
   .msg strong { font-size: 1.125rem; color: var(--color-text); }
   .photo { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
-  .slide { height: 3px; border-radius: 2px; background: oklch(1 0 0 / 0.12); overflow: hidden; margin-bottom: 6px; }
+  .slide { height: 3px; border-radius: 2px; background: oklch(var(--n1000) / 0.12); overflow: hidden; margin-bottom: 6px; }
   .slide i { display: block; height: 100%; background: var(--color-text); }
   [hidden] { display: none !important; }
   .poster { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0.45; }
@@ -491,7 +491,7 @@
     width: 44px;
     height: 44px;
     border-radius: 50%;
-    border: 4px solid oklch(1 0 0 / 0.15);
+    border: 4px solid oklch(var(--n1000) / 0.15);
     border-top-color: var(--color-text);
     animation: spin 800ms linear infinite;
   }
@@ -504,12 +504,13 @@
     display: grid;
     place-items: center;
     border-radius: 50%;
-    background: oklch(1 0 0 / 0.1);
+    background: oklch(var(--n1000) / 0.1);
     color: var(--color-text);
-    transition: background 150ms var(--ease-out), transform 150ms var(--ease-out), opacity 150ms;
+    /* Paint-only: WebKitGTK blinks a frame when a GPU opacity/transform transition ends */
+    transition: background 150ms var(--ease-out);
   }
   .navbtn :global(svg) { width: 24px; height: 24px; }
-  .navbtn:hover { background: oklch(1 0 0 / 0.2); transform: scale(1.06); }
+  .navbtn:hover { background: oklch(var(--n1000) / 0.2); }
   .navbtn:disabled { opacity: 0.25; pointer-events: none; }
   .navbtn:focus-visible { outline: 2px solid var(--color-text); outline-offset: 2px; }
 
@@ -521,8 +522,8 @@
     gap: 10px;
     padding: 16px;
     border-radius: 12px;
-    background: oklch(0.16 0.004 25 / 0.8);
-    box-shadow: inset 0 0 0 1px oklch(1 0 0 / 0.07);
+    background: oklch(var(--n160) / 0.8);
+    box-shadow: inset 0 0 0 1px oklch(var(--n1000) / 0.07);
   }
   .info h1 {
     font-size: 1.125rem;
@@ -538,7 +539,7 @@
   .plat { display: inline-flex; align-items: center; gap: 6px; color: var(--color-text); font-weight: 700; }
   .plat::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: var(--c); }
   .tags { display: flex; flex-wrap: wrap; gap: 6px; }
-  .tags span { padding: 3px 9px; border-radius: 12px; background: oklch(1 0 0 / 0.08); font-size: 0.75rem; font-weight: 600; color: oklch(0.88 0.004 25); }
+  .tags span { padding: 3px 9px; border-radius: 12px; background: oklch(var(--n1000) / 0.08); font-size: 0.75rem; font-weight: 600; color: oklch(var(--n880)); }
   .actions { display: flex; flex-wrap: wrap; gap: 6px; }
   .pill {
     display: inline-flex;
@@ -547,15 +548,15 @@
     height: 34px;
     padding: 0 12px;
     border-radius: 17px;
-    background: oklch(1 0 0 / 0.08);
-    color: oklch(0.88 0.004 25);
+    background: oklch(var(--n1000) / 0.08);
+    color: oklch(var(--n880));
     font-size: 0.8125rem;
     font-weight: 700;
     transition: background 120ms var(--ease-out), color 120ms var(--ease-out);
   }
   .pill :global(svg) { width: 16px; height: 16px; }
-  .pill:hover { background: oklch(1 0 0 / 0.14); color: var(--color-text); }
-  .pill.on { background: var(--color-text); color: oklch(0.16 0.004 25); }
+  .pill:hover { background: oklch(var(--n1000) / 0.14); color: var(--color-text); }
+  .pill.on { background: var(--color-text); color: oklch(var(--n160)); }
 
   .pill.del { margin-left: auto; padding: 0 10px; }
   .pill.del:hover { background: var(--color-accent); color: var(--color-on-accent); }
@@ -569,8 +570,8 @@
     box-shadow: inset 0 0 0 1px oklch(0.58 0.225 27 / 0.5);
   }
   .ask b { font-size: 0.875rem; margin-bottom: 2px; }
-  .abtn { height: 34px; border-radius: 7px; background: oklch(1 0 0 / 0.1); color: var(--color-text); font-size: 0.8125rem; font-weight: 700; }
-  .abtn:hover { background: oklch(1 0 0 / 0.16); }
+  .abtn { height: 34px; border-radius: 7px; background: oklch(var(--n1000) / 0.1); color: var(--color-text); font-size: 0.8125rem; font-weight: 700; }
+  .abtn:hover { background: oklch(var(--n1000) / 0.16); }
   .abtn.danger { background: var(--color-accent); color: var(--color-on-accent); }
   .abtn.danger:hover { background: var(--color-accent-hover); }
   .abtn.plain { background: none; color: var(--color-text-muted); }
@@ -591,8 +592,8 @@
     color: var(--color-text);
     transition: background 120ms var(--ease-out);
   }
-  .qi:hover { background: oklch(1 0 0 / 0.07); }
-  .qi.on { background: oklch(1 0 0 / 0.12); }
+  .qi:hover { background: oklch(var(--n1000) / 0.07); }
+  .qi.on { background: oklch(var(--n1000) / 0.12); }
   .qi.past { opacity: 0.55; }
   .qi:focus-visible { outline: 2px solid var(--color-text); outline-offset: -2px; }
   .qthumb {
@@ -602,7 +603,7 @@
     height: 60px;
     border-radius: 6px;
     overflow: hidden;
-    background: oklch(0.2 0.005 25);
+    background: oklch(var(--n200));
   }
   .qthumb img { width: 100%; height: 100%; object-fit: cover; }
   .qtext { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
@@ -617,7 +618,7 @@
   /* ── Controls ── */
   .controls { display: flex; flex-direction: column; gap: 4px; padding: 10px 24px 14px; }
   .seek { display: flex; align-items: center; gap: 14px; }
-  .time { min-width: 46px; font-size: 0.8125rem; font-weight: 700; font-variant-numeric: tabular-nums; color: oklch(0.85 0.004 25); }
+  .time { min-width: 46px; font-size: 0.8125rem; font-weight: 700; font-variant-numeric: tabular-nums; color: oklch(var(--n850)); }
   .time.end { text-align: end; }
   .seek input {
     flex: 1;
@@ -627,7 +628,7 @@
     padding: 0;
     border: none;
     border-radius: 3px;
-    background: linear-gradient(to right, var(--color-accent) var(--fill), oklch(1 0 0 / 0.2) var(--fill));
+    background: linear-gradient(to right, var(--color-accent) var(--fill), oklch(var(--n1000) / 0.2) var(--fill));
     cursor: pointer;
   }
   .seek input::-webkit-slider-thumb {
@@ -648,12 +649,12 @@
     place-items: center;
     border-radius: 8px;
     background: none;
-    color: oklch(0.9 0.004 25);
+    color: oklch(var(--n900));
     transition: background 120ms var(--ease-out);
   }
   .ib :global(svg) { width: 22px; height: 22px; }
   .ib.big :global(svg) { width: 28px; height: 28px; }
-  .ib:hover { background: oklch(1 0 0 / 0.08); color: var(--color-text); }
+  .ib:hover { background: oklch(var(--n1000) / 0.08); color: var(--color-text); }
   .ib:disabled { opacity: 0.3; pointer-events: none; }
   .ib:focus-visible { outline: 2px solid var(--color-text); outline-offset: -2px; }
   .vol { display: inline-flex; align-items: center; gap: 4px; margin-left: 6px; }
@@ -665,12 +666,12 @@
     padding: 0;
     border: none;
     border-radius: 2px;
-    background: linear-gradient(to right, var(--color-text) var(--fill), oklch(1 0 0 / 0.2) var(--fill));
+    background: linear-gradient(to right, var(--color-text) var(--fill), oklch(var(--n1000) / 0.2) var(--fill));
     cursor: pointer;
   }
   .vol-slider::-webkit-slider-thumb { -webkit-appearance: none; width: 13px; height: 13px; border-radius: 50%; background: var(--color-text); }
   .keys { font-size: 0.75rem; font-weight: 600; color: var(--color-text-muted); margin-right: 8px; }
-  .btn { height: 36px; padding: 0 16px; border-radius: 6px; background: var(--color-text); color: oklch(0.14 0.004 25); font-size: 0.875rem; font-weight: 700; }
+  .btn { height: 36px; padding: 0 16px; border-radius: 6px; background: var(--color-text); color: oklch(var(--n140)); font-size: 0.875rem; font-weight: 700; }
   .err { font-size: 0.8125rem; color: var(--color-accent-soft); }
 
   @media (max-width: 1100px) {
@@ -679,6 +680,5 @@
   }
   @media (prefers-reduced-motion: reduce) {
     .spinner, .eq i { animation: none; }
-    .navbtn:hover { transform: none; }
   }
 </style>

@@ -1,0 +1,14 @@
+{
+  "bundle": {
+    "linux": {
+      "deb": {
+        "depends": ["mpv", "ffmpeg"],
+        "recommends": ["yt-dlp"]
+      },
+      "rpm": {
+        "depends": ["mpv", "/usr/bin/ffmpeg", "/usr/bin/ffprobe"],
+        "recommends": ["yt-dlp"]
+      }
+    }
+  }
+}

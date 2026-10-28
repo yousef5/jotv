@@ -36,11 +36,14 @@
     display: flex;
     align-items: center;
     gap: 16px;
-    transition: transform var(--transition-fast), box-shadow var(--transition-fast);
+    /* Paint-only lift (top, not transform): WebKitGTK blinks when a GPU transition ends */
+    position: relative;
+    top: 0;
+    transition: top var(--transition-fast), box-shadow var(--transition-fast);
   }
 
   .stat-card:hover {
-    transform: translateY(-2px);
+    top: -2px;
     box-shadow: 0 8px 25px rgba(0, 0, 0, 0.3);
   }
 

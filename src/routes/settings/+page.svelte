@@ -7,16 +7,25 @@
   import { detectExternalPlayers, getDefaultDownloadDir, showInFolder, getSetting, setSetting, tmdbCheckKey } from '$lib/tauri';
   import type { ExternalPlayer } from '$lib/tauri';
   import { open } from '@tauri-apps/plugin-dialog';
+  import SystemCheck from '$lib/components/SystemCheck.svelte';
+  import logoMark from '$lib/assets/logo-mark.png';
+  import { getVersion } from '@tauri-apps/api/app';
 
   let detectedPlayers: ExternalPlayer[] = $state([]);
+  let appVersion = $state('');
+  getVersion().then((v) => (appVersion = v)).catch(() => {});
   let defaultDownloadDir: string = $state('');
   let tmdbKey = $state('');
   let tmdbStatus = $state<'' | 'checking' | 'saved' | 'invalid' | 'error' | 'removed'>('');
   let tmdbError = $state('');
 
+  // Sections stay hidden until the saved values are in, so fields don't flash empty
+  let ready = $state(false);
+
   onMount(async () => {
     await loadSettings();
     tmdbKey = (await getSetting('tmdb_api_key').catch(() => null)) ?? '';
+    ready = true;
     try {
       detectedPlayers = await detectExternalPlayers();
     } catch (e) {
@@ -87,10 +96,10 @@
   }
 </script>
 
-<div class="settings-page fade-in">
+<div class="settings-page">
   <h1 class="page-title">Settings</h1>
 
-  <div class="settings-sections">
+  <div class="settings-sections" style:visibility={ready ? null : 'hidden'}>
     <!-- General -->
     <section class="setting-section">
       <h2 class="section-title">General</h2>
@@ -213,14 +222,21 @@
       </div>
     </section>
 
+    <!-- System -->
+    <section class="setting-section">
+      <h2 class="section-title">System</h2>
+      <p class="section-note">The programs JoTV uses to play and save video.</p>
+      <SystemCheck />
+    </section>
+
     <!-- About -->
     <section class="setting-section">
       <h2 class="section-title">About</h2>
       <div class="about-info">
-        <div class="about-logo">J</div>
+        <img class="about-logo" src={logoMark} alt="" />
         <div>
-          <p class="about-name">JoTV</p>
-          <p class="about-version">Version 0.0.1</p>
+          <p class="about-name"><b class="jo">Jo</b>Tv</p>
+          <p class="about-version">Version {appVersion}</p>
           <p class="about-desc">A personal IPTV player built with Tauri + SvelteKit</p>
         </div>
       </div>
@@ -229,6 +245,9 @@
 </div>
 
 <style>
+  .about-name .jo { color: var(--color-accent); }
+  .section-note { margin: -6px 0 14px; font-size: 0.8125rem; color: var(--color-text-muted); }
+
   .settings-page {
     display: flex;
     flex-direction: column;
@@ -447,16 +466,9 @@
   }
 
   .about-logo {
-    width: 48px;
-    height: 48px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 24px;
-    font-weight: 800;
-    color: var(--color-accent);
-    background: rgba(233, 69, 96, 0.12);
-    border-radius: 12px;
+    width: 56px;
+    height: 56px;
+    object-fit: contain;
     flex-shrink: 0;
   }
 
@@ -484,7 +496,7 @@
     padding: 0 18px;
     border-radius: var(--radius-btn);
     background: var(--color-text);
-    color: oklch(0.14 0.004 25);
+    color: oklch(var(--n140));
     font-weight: 700;
   }
   .tmdb-note { flex-basis: 100%; font-size: 0.8125rem; color: var(--color-text-muted); }

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, tick, untrack } from 'svelte';
-  import { fade, slide } from 'svelte/transition';
+  import { jsFade, jsSlide } from '$lib/motion';
   import { getSocialVideoInfo, checkYtdlp, reelCategorySave } from '$lib/tauri';
   import type { SocialVideoInfo } from '$lib/tauri';
   import {
@@ -52,7 +52,7 @@
     newCat = { name: '', parent: main === null ? '' : String(main) };
     newCatError = '';
     await tick();
-    newCatEl?.focus();
+    newCatEl?.focus({ preventScroll: true });
   }
 
   async function createCat() {
@@ -72,7 +72,7 @@
   let formatOptions = $derived((info?.formats ?? []).map((f) => ({ value: f.format_id, label: f.label })));
 
   onMount(() => {
-    inputEl?.focus();
+    inputEl?.focus({ preventScroll: true });
     checkYtdlp().catch(() => (missingTool = true));
     if (initialUrl) fetchInfo();
   });
@@ -135,7 +135,7 @@
     url = '';
     tags = [];
     fetchedFor = '';
-    inputEl?.focus();
+    inputEl?.focus({ preventScroll: true });
   }
 
   function onKey(e: KeyboardEvent) {
@@ -147,7 +147,7 @@
 </script>
 
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-<section class="panel" transition:slide={{ duration: 220 }} aria-label="Add from a link" onkeydown={onKey}>
+<section class="panel" transition:jsSlide={{ duration: 220 }} aria-label="Add from a link" onkeydown={onKey}>
   <div class="row">
     <label class="url" class:busy={fetching}>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 007.5.5l3-3a5 5 0 00-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 00-7.5-.5l-3 3a5 5 0 007 7l1.7-1.7"/></svg>
@@ -173,17 +173,17 @@
   {#if missingTool}
     <p class="note warn">Downloading needs <b>yt-dlp</b>. Install it (<code>sudo pacman -S yt-dlp</code> or <code>pip install yt-dlp</code>) and reopen this panel.</p>
   {:else if error}
-    <p class="note warn" transition:fade={{ duration: 120 }}>{error}</p>
+    <p class="note warn" transition:jsFade={{ duration: 120 }}>{error}</p>
   {:else if !info && !fetching}
     <p class="sites">
-      {#each SITES as s (s)}<span style:--c={PLATFORM_COLORS[s === 'X' ? 'Twitter/X' : s] ?? 'oklch(0.6 0.01 25)'}>{s}</span>{/each}
+      {#each SITES as s (s)}<span style:--c={PLATFORM_COLORS[s === 'X' ? 'Twitter/X' : s] ?? 'oklch(var(--n600))'}>{s}</span>{/each}
     </p>
   {/if}
 
   {#if fetching}
     <div class="preview skeleton" aria-hidden="true"><span class="shot"></span><span class="lines"><i></i><i></i><i></i></span></div>
   {:else if info}
-    <div class="preview" in:fade={{ duration: 160 }}>
+    <div class="preview" in:jsFade={{ duration: 160 }}>
       <div class="shot">
         {#if info.thumbnail}<img src={info.thumbnail} alt="" referrerpolicy="no-referrer" />{/if}
         {#if info.duration}<span class="dur">{fmtDuration(info.duration)}</span>{/if}
@@ -207,7 +207,7 @@
             {#if !newCat}<button class="add-cat" onclick={openNewCat}>+ New</button>{/if}
           </span>
           {#if newCat}
-            <div class="newcat" transition:fade={{ duration: 120 }}>
+            <div class="newcat" transition:jsFade={{ duration: 120 }}>
               <input
                 bind:this={newCatEl}
                 bind:value={newCat.name}
@@ -236,7 +236,7 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11"/><polyline points="7 10 12 15 17 10"/><path d="M4 19.5h16"/></svg>
             Download to library
           </button>
-          <button class="btn ghost" onclick={() => { info = null; url = ''; fetchedFor = ''; inputEl?.focus(); }}>Different link</button>
+          <button class="btn ghost" onclick={() => { info = null; url = ''; fetchedFor = ''; inputEl?.focus({ preventScroll: true }); }}>Different link</button>
         </div>
       </div>
     </div>
@@ -274,7 +274,7 @@
     width: 18px;
     height: 18px;
     border-radius: 50%;
-    border: 2.5px solid oklch(1 0 0 / 0.15);
+    border: 2.5px solid oklch(var(--n1000) / 0.15);
     border-top-color: var(--color-text);
     animation: spin 700ms linear infinite;
   }
@@ -289,21 +289,21 @@
     padding: 0 18px;
     border-radius: 9px;
     background: var(--color-text);
-    color: oklch(0.16 0.004 25);
+    color: oklch(var(--n160));
     font-size: 0.875rem;
     font-weight: 700;
     white-space: nowrap;
   }
   .btn :global(svg) { width: 18px; height: 18px; }
-  .btn:hover { background: oklch(0.86 0.004 25); }
+  .btn:hover { background: oklch(var(--n860)); }
   .btn:disabled { opacity: 0.45; pointer-events: none; }
   .btn.primary { background: var(--color-accent); color: var(--color-on-accent); }
   .btn.primary:hover { background: var(--color-accent-hover); }
-  .btn.ghost { background: oklch(1 0 0 / 0.08); color: var(--color-text); }
-  .btn.ghost:hover { background: oklch(1 0 0 / 0.14); }
+  .btn.ghost { background: oklch(var(--n1000) / 0.08); color: var(--color-text); }
+  .btn.ghost:hover { background: oklch(var(--n1000) / 0.14); }
   .btn:focus-visible { outline: 2px solid var(--color-text); outline-offset: 2px; }
   .ib { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 8px; background: none; color: var(--color-text-muted); }
-  .ib:hover { background: oklch(1 0 0 / 0.08); color: var(--color-text); }
+  .ib:hover { background: oklch(var(--n1000) / 0.08); color: var(--color-text); }
   .ib :global(svg) { width: 18px; height: 18px; }
 
   .sites { display: flex; flex-wrap: wrap; gap: 6px 14px; padding: 0 4px; font-size: 0.75rem; font-weight: 600; color: var(--color-text-muted); }
@@ -321,7 +321,7 @@
     aspect-ratio: 16 / 9;
     border-radius: 10px;
     overflow: hidden;
-    background: oklch(0.14 0.004 25);
+    background: oklch(var(--n140));
   }
   .shot img { width: 100%; height: 100%; object-fit: cover; }
   .dur { position: absolute; right: 8px; bottom: 8px; padding: 2px 6px; border-radius: 4px; background: oklch(0 0 0 / 0.7); font-size: 0.75rem; font-weight: 700; }
@@ -350,7 +350,7 @@
   .go .btn { height: 42px; }
 
   .skeleton .shot, .skeleton .lines i {
-    background: linear-gradient(100deg, oklch(0.22 0.005 25) 40%, oklch(0.27 0.005 25) 50%, oklch(0.22 0.005 25) 60%) 0 0 / 300% 100%;
+    background: linear-gradient(100deg, oklch(var(--n220)) 40%, oklch(var(--n270)) 50%, oklch(var(--n220)) 60%) 0 0 / 300% 100%;
     animation: shimmer 1.3s linear infinite;
   }
   .skeleton .lines { flex: 1; display: flex; flex-direction: column; gap: 10px; padding-top: 6px; }

@@ -153,11 +153,11 @@
     flex-direction: column;
     justify-content: space-between;
     z-index: 10;
-    transition: opacity 0.3s ease;
   }
 
+  /* Instant hide: a CSS opacity fade blinks for a frame in WebKitGTK when it ends */
   .controls-wrapper.hidden {
-    opacity: 0;
+    visibility: hidden;
     pointer-events: none;
   }
 
@@ -221,17 +221,15 @@
     width: 64px;
     height: 64px;
     border-radius: 50%;
-    background: rgba(233, 69, 96, 0.8);
+    background: rgba(233, 69, 96, 0.9);
     display: flex;
     align-items: center;
     justify-content: center;
     color: #fff;
-    backdrop-filter: blur(8px);
   }
 
   .center-play:hover {
     background: rgba(233, 69, 96, 1);
-    transform: scale(1.08);
   }
 
   .center-play :global(svg) {

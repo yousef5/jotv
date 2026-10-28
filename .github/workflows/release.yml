@@ -55,6 +55,42 @@ jobs:
           releaseDraft: false
           prerelease: false
 
+      # The Arch package is made from this .deb (see build-arch)
+      - name: Keep the .deb for the Arch package
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-deb
+          path: src-tauri/target/release/bundle/deb/*.deb
+
+  # CachyOS / Arch: packages the .deb from build-linux with packaging/arch/PKGBUILD
+  build-arch:
+    needs: build-linux
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get the .deb
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-deb
+          path: packaging/arch
+
+      - name: Build the package
+        run: |
+          useradd -m builder
+          chown -R builder packaging/arch
+          cd packaging/arch
+          sed -i "s/^pkgver=.*/pkgver=${GITHUB_REF_NAME#v}/" PKGBUILD
+          # Dependencies are for installing, not for repackaging
+          sudo -u builder makepkg --nodeps --noconfirm
+
+      - name: Attach to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: packaging/arch/*.pkg.tar.zst
+
   build-windows:
     runs-on: windows-latest
     steps:
@@ -80,6 +116,13 @@ jobs:
 
       - name: Install frontend dependencies
         run: pnpm install
+
+      # mpv, ffmpeg, ffprobe and yt-dlp ship inside the Windows app (see src-tauri/src/tools.rs)
+      - name: Fetch bundled tools
+        shell: pwsh
+        run: ./scripts/fetch-windows-tools.ps1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build Tauri
         uses: tauri-apps/tauri-action@v0
