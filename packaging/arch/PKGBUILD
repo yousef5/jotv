@@ -4,7 +4,7 @@
 # `pnpm tauri build --bundles deb` makes (CI does the same for releases).
 # Put JoTV_<version>_amd64.deb next to this file, then: makepkg -si
 pkgname=jotv
-pkgver=0.3.0
+pkgver=0.3.1
 pkgrel=1
 pkgdesc='IPTV player for live TV, movies and series'
 arch=('x86_64')

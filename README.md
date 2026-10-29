@@ -19,7 +19,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%7C%20macOS-blue" alt="Platform">
-  <img src="https://img.shields.io/badge/version-0.1.0-green" alt="Version">
+  <img src="https://img.shields.io/badge/version-0.3.1-green" alt="Version">
   <img src="https://img.shields.io/badge/license-MIT-orange" alt="License">
   <img src="https://img.shields.io/badge/tauri-v2-purple" alt="Tauri v2">
 </p>
@@ -83,37 +83,42 @@
 
 ## Installation
 
-### Linux (CachyOS / Arch)
+Get the latest version from the **[Releases page](https://github.com/yousef5/jotv/releases/latest)**. Pick the file for your system:
 
-```bash
-# Download the .pkg.tar.zst from Releases page
-sudo pacman -U jotv-0.1.0-1-x86_64.pkg.tar.zst
-```
+| System | File | How |
+|---|---|---|
+| **Windows 10/11** | `JoTV_<version>_x64-setup.exe` (or `.msi`) | Double-click, follow the installer. Everything JoTV needs (mpv, ffmpeg, yt-dlp) is inside. |
+| **CachyOS / Arch / Manjaro** | `jotv-<version>-1-x86_64.pkg.tar.zst` | `sudo pacman -U jotv-*.pkg.tar.zst` |
+| **Ubuntu / Debian / Mint** | `JoTV_<version>_amd64.deb` | `sudo apt install ./JoTV_*_amd64.deb` |
+| **Fedora / RHEL / openSUSE** | `JoTV-<version>-1.x86_64.rpm` | `sudo dnf install ./JoTV-*.rpm` |
+| **Any Linux** | `JoTV_<version>_amd64.AppImage` | `chmod +x JoTV_*.AppImage && ./JoTV_*.AppImage` |
+| **macOS** | `JoTV_<version>_universal.dmg` | Open it, drag JoTV to Applications. The first time, right-click the app and choose **Open** (it is not notarized). |
 
-### Ubuntu / Debian
+### What each system needs
 
-```bash
-# Download the .deb from Releases page
-sudo dpkg -i jotv_0.1.0_amd64.deb
-sudo apt-get install -f  # install dependencies if needed
-```
+- **Windows**: nothing else.
+- **Linux**: the package manager installs `mpv` and `ffmpeg` for you. `yt-dlp` is optional (Reels and Social downloads): `sudo pacman -S yt-dlp` / `sudo apt install yt-dlp` / `sudo dnf install yt-dlp`. On **Wayland** JoTV runs through XWayland (`xorg-xwayland`), which most desktops already have.
+- **macOS**: `brew install mpv ffmpeg yt-dlp`.
+- JoTV checks all of this for you: on first start (and in **Settings → System**) it shows what is missing and the exact command to install it for your distribution.
 
-### Windows
+### First start
 
-Download `JoTV_0.1.0_x64-setup.exe` from the [Releases](../../releases) page.
+1. Open JoTV and choose **Add playlist**.
+2. Pick **Xtream Codes** (server URL + username + password from your provider) or **M3U** (a link or a file).
+3. Wait for the first import; big playlists (60,000+ items) take a few seconds.
+4. Optional: in **Settings** add your free [TMDB](https://www.themoviedb.org/settings/api) key for posters, backdrops and cast.
 
-### macOS
+### Updating
 
-Download `JoTV_0.1.0_universal.dmg` from the [Releases](../../releases) page.
+Install the new file over the old one (same command as above). Your playlists, favorites and history are kept.
 
-### Requirements
+### Uninstalling
 
-- **MPV** is required for live TV playback
-  - **Arch/CachyOS**: `sudo pacman -S mpv`
-  - **Ubuntu/Debian**: `sudo apt install mpv`
-  - **Windows**: Download from [mpv.io](https://mpv.io/installation/)
-  - **macOS**: `brew install mpv`
-- **VLC** (optional) - used as fallback for VOD/series file playback
+Windows: *Settings → Apps → JoTV → Uninstall*. Arch: `sudo pacman -R jotv`. Debian/Ubuntu: `sudo apt remove jotv`. Fedora: `sudo dnf remove jotv`.
+
+### Android
+
+JoTV also has an Android version (phones and tablets): **JoTV Mobile**, in the private repository `yousef5/jotv-mobile`.
 
 ---
 

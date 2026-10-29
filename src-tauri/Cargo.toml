@@ -1,6 +1,6 @@
 [package]
 name = "jotv"
-version = "0.3.0"
+version = "0.3.1"
 description = "JoTV - IPTV Player"
 authors = ["Mohammed Yousef <yousefcoding311@gmail.com>"]
 license = ""
