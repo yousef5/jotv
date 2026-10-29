@@ -1,6 +1,6 @@
 import { writable, get } from 'svelte/store';
 import { listen } from '@tauri-apps/api/event';
-import { refreshPlaylist } from '$lib/tauri';
+import { providerTryAgain, refreshPlaylist } from '$lib/tauri';
 import type { Playlist } from '$lib/tauri';
 import { playlists, loadPlaylists } from './playlists';
 
@@ -62,7 +62,9 @@ const PHASE_SPAN: Record<SyncPhase, [number, number]> = {
 // Skip the launch sync for playlists refreshed this recently. Restarting the app
 // (or the dev build) repeatedly would otherwise hammer the Xtream server, which
 // IP-blocks bursts of requests.
-const LAUNCH_MIN_AGE_MS = 15 * 60 * 1000;
+// A full sync downloads the whole catalog. Doing that at every launch after 15 minutes is the kind of
+// traffic that gets an IPTV account blocked, so launch only refreshes playlists older than this.
+const LAUNCH_MIN_AGE_MS = 6 * 60 * 60 * 1000;
 
 let launchSyncStarted = false;
 
@@ -82,7 +84,8 @@ function newestUpdate(list: Playlist[]): number | null {
   return times.length ? Math.max(...times) : null;
 }
 
-export async function syncPlaylists(targets?: Playlist[]): Promise<void> {
+/** `userInitiated` (a button) lifts the provider pause first; the launch sync never does. */
+export async function syncPlaylists(targets?: Playlist[], userInitiated = true): Promise<void> {
   if (get(syncState).running) return;
 
   if (!targets) {
@@ -90,6 +93,7 @@ export async function syncPlaylists(targets?: Playlist[]): Promise<void> {
     targets = get(playlists).filter(isSyncable);
   }
   if (targets.length === 0) return;
+  if (userInitiated) await providerTryAgain().catch(() => {});
 
   syncState.update((s) => ({
     ...s,
@@ -173,5 +177,5 @@ export async function syncOnLaunch(): Promise<void> {
     const t = lastUpdatedMs(p);
     return t === null || Date.now() - t > LAUNCH_MIN_AGE_MS;
   });
-  if (stale.length) await syncPlaylists(stale);
+  if (stale.length) await syncPlaylists(stale, false);
 }

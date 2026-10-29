@@ -1,6 +1,7 @@
 pub mod commands;
 pub mod db;
 pub mod parsers;
+pub mod provider_guard;
 pub mod tools;
 
 use commands::downloads::DownloadManager;
@@ -53,6 +54,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             // Playlists
             commands::playlists::get_playlists,
+            commands::playlists::provider_try_again,
             commands::playlists::add_playlist_from_url,
             commands::playlists::add_playlist_from_file,
             commands::playlists::add_playlist_from_xtream,

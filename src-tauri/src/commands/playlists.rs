@@ -319,6 +319,13 @@ pub async fn add_playlist_from_xtream(
     Ok(playlist)
 }
 
+/// The user chose to try again (a button), so the pause the app put itself under is lifted.
+/// Background work never calls this. See `provider_guard`.
+#[tauri::command]
+pub fn provider_try_again() {
+    crate::provider_guard::try_again();
+}
+
 #[tauri::command]
 pub async fn get_xtream_account_info(
     server: String,

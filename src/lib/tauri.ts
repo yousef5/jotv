@@ -234,6 +234,11 @@ export function getSeriesInfo(
   return invoke<SeriesDetail>('get_series_info', { server, username, password, seriesId });
 }
 
+/** Lifts the pause JoTV puts itself under after the provider refuses requests (HTTP 461/469/429). */
+export function providerTryAgain(): Promise<void> {
+  return invoke<void>('provider_try_again');
+}
+
 export function refreshPlaylist(id: number): Promise<Playlist> {
   return invoke<Playlist>('refresh_playlist', { id });
 }

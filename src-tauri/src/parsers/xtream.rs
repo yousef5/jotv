@@ -467,17 +467,23 @@ fn xtream_client(timeout_secs: u64) -> Result<reqwest::Client, String> {
         .map_err(|e| format!("Failed to create HTTP client: {}", e))
 }
 
+/// GET that respects the provider guard: not sent while the server is refusing us, and every answer is
+/// recorded so a refusal (461, 469, 429) pauses further requests instead of hammering a block longer.
+async fn guarded_get(client: &reqwest::Client, url: &str) -> Result<reqwest::Response, String> {
+    crate::provider_guard::check(url)?;
+    let resp = client.get(url).send().await.map_err(|e| format!("Failed to connect: {}", e))?;
+    crate::provider_guard::record(url, resp.status().as_u16());
+    Ok(resp)
+}
+
 /// Fetch account info from an Xtream Codes server.
 pub async fn fetch_xtream_account_info(
     creds: &XtreamCredentials,
 ) -> Result<XtreamAccountInfo, String> {
     let client = xtream_client(15)?;
 
-    let resp: XtreamAuthResponse = client
-        .get(creds.base_url())
-        .send()
-        .await
-        .map_err(|e| format!("Failed to connect: {}", e))?
+    let resp: XtreamAuthResponse = guarded_get(&client, &creds.base_url())
+        .await?
         .json()
         .await
         .map_err(|e| format!("Failed to parse response: {}", e))?;
@@ -493,11 +499,7 @@ pub async fn fetch_series_info(
     let client = xtream_client(30)?;
 
     let url = format!("{}&action=get_series_info&series_id={}", creds.base_url(), series_id);
-    let resp = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| format!("Failed to fetch series info: {}", e))?;
+    let resp = guarded_get(&client, &url).await?;
 
     let status = resp.status();
     let body = resp.bytes().await
@@ -590,11 +592,7 @@ pub async fn fetch_vod_info(
     let client = xtream_client(30)?;
 
     let url = format!("{}&action=get_vod_info&vod_id={}", creds.base_url(), vod_id);
-    let resp = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| format!("Failed to fetch VOD info: {}", e))?;
+    let resp = guarded_get(&client, &url).await?;
 
     let status = resp.status();
     let body = resp.bytes().await
@@ -634,11 +632,16 @@ fn parse_vod_info(body: &[u8]) -> Result<VodDetail, String> {
 /// Progress callback for reporting import status.
 pub type ProgressCallback = Box<dyn Fn(&str, usize, usize) + Send + Sync>;
 
-/// Helper: download response bytes
-async fn download_bytes(resp: Result<reqwest::Response, reqwest::Error>) -> Option<Vec<u8>> {
-    let r = resp.ok()?;
-    let b = r.bytes().await.ok()?;
-    Some(b.to_vec())
+/// Helper: GET a URL through the provider guard and read the whole body.
+/// A refusal (461, 469, 429...) is an error, so the caller can stop instead of asking for more.
+async fn get_bytes(client: &reqwest::Client, url: String) -> Result<Vec<u8>, String> {
+    let resp = guarded_get(client, &url).await?;
+    let status = resp.status();
+    if crate::provider_guard::is_refusal(status.as_u16()) {
+        return Err(format!("The provider refused the request (HTTP {})", status.as_u16()));
+    }
+    let b = resp.bytes().await.map_err(|e| format!("Failed to read response body: {}", e))?;
+    Ok(b.to_vec())
 }
 
 /// Helper: parse JSON on a blocking thread (avoids blocking the async runtime for large payloads)
@@ -665,27 +668,18 @@ pub async fn fetch_xtream_channels(
 
     report("Downloading channel lists...", 0, 0);
 
-    // Step 1: Send all 6 requests in parallel
-    let (live_cats_r, live_streams_r, vod_cats_r, vod_streams_r, series_cats_r, series_r) = tokio::join!(
-        client.get(format!("{}&action=get_live_categories", base)).send(),
-        client.get(format!("{}&action=get_live_streams", base)).send(),
-        client.get(format!("{}&action=get_vod_categories", base)).send(),
-        client.get(format!("{}&action=get_vod_streams", base)).send(),
-        client.get(format!("{}&action=get_series_categories", base)).send(),
-        client.get(format!("{}&action=get_series", base)).send(),
-    );
-
+    // Steps 1+2: two requests at a time, not six. Six big parallel downloads from one account look like
+    // abuse to a provider's firewall, which then blocks the IP (HTTP 461/469) and that block lasts.
+    // A refusal stops the rest right away instead of hammering on.
+    let get = |action: &str| get_bytes(&client, format!("{}&action={}", base, action));
+    let (live_cats_b, live_streams_b) = tokio::join!(get("get_live_categories"), get("get_live_streams"));
+    let live_streams_b = live_streams_b?;
     report("Downloading response data...", 0, 0);
-
-    // Step 2: Download ALL response bodies in parallel (this is the slow network part)
-    let (live_cats_b, live_streams_b, vod_cats_b, vod_streams_b, series_cats_b, series_b) = tokio::join!(
-        download_bytes(live_cats_r),
-        download_bytes(live_streams_r),
-        download_bytes(vod_cats_r),
-        download_bytes(vod_streams_r),
-        download_bytes(series_cats_r),
-        download_bytes(series_r),
-    );
+    let (vod_cats_b, vod_streams_b) = tokio::join!(get("get_vod_categories"), get("get_vod_streams"));
+    let (vod_cats_b, vod_streams_b) = (vod_cats_b.ok(), vod_streams_b.ok());
+    let (series_cats_b, series_b) = tokio::join!(get("get_series_categories"), get("get_series"));
+    let (live_cats_b, series_cats_b, series_b) = (live_cats_b.ok(), series_cats_b.ok(), series_b.ok());
+    let (live_streams_b, vod_streams_b, series_b) = (Some(live_streams_b), vod_streams_b, series_b);
 
     report("Parsing data...", 0, 0);
 
